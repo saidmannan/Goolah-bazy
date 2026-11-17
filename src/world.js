@@ -555,7 +555,7 @@ export function buildWorld(scene, renderer) {
   time('environment', () => createEnvironment(scene, renderer));
   const sun = time('lights', () => createLights(scene));
   const ground = time('ground', () => createGround(scene, renderer));
-  const holes = time('holes', () => createHoles(scene));
+  const mats = time('mats', () => createMats(scene));
 
   // Decoration is added one step at a time by main.js, after the playable
   // field is on screen, so no single long task blocks the first paint.
@@ -567,5 +567,5 @@ export function buildWorld(scene, renderer) {
     () => backdropClouds(scene),
   ];
 
-  return { sun, holes, ground, decorSteps, timings };
+  return { sun, mats, ground, decorSteps, timings };
 }
