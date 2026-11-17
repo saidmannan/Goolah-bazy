@@ -36,10 +36,12 @@ export function throwVelocity(dir, power, cfg, out = new THREE.Vector3()) {
 
 /**
  * Advance one ball by h seconds.
+ * `surface(x, z)` returns the ground height at a point, so the shallow mat dishes
+ * are part of the physics rather than just artwork. Defaults to flat ground.
  * Returns { impact, grounded }: impact is the vertical speed absorbed by the
  * ground this step (used for dust and sound), 0 when nothing touched down.
  */
-export function stepBallMotion(body, h, cfg) {
+export function stepBallMotion(body, h, cfg, surface) {
   const R = body.radius;
   const p = body.pos;
   const v = body.vel;
@@ -52,9 +54,11 @@ export function stepBallMotion(body, h, cfg) {
 
   p.addScaledVector(v, h);
 
-  const grounded = p.y <= R;
+  const groundY = surface ? surface(p.x, p.z) : 0;
+  const floor = groundY + R;
+  const grounded = p.y <= floor;
   if (grounded) {
-    p.y = R;
+    p.y = floor;
 
     if (v.y < 0) {
       impact = -v.y;
@@ -138,7 +142,7 @@ export function simulateShot(start, dir, power, cfg, options = {}) {
 
   while (elapsed < maxTime) {
     const wasAirborne = body.pos.y > cfg.ballRadius + 1e-4;
-    stepBallMotion(body, h, cfg);
+    stepBallMotion(body, h, cfg, options.surface);
     elapsed += h;
     if (wasAirborne) airborneTime = elapsed;
 
