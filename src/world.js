@@ -310,8 +310,10 @@ function createHoles(scene) {
 
 /* ----------------------------------------------------------------- props --- */
 
-function createScatter(scene) {
+function scatterPebbles(scene) {
   const rand = (min, max) => min + Math.random() * (max - min);
+  const dummy = new THREE.Object3D();
+  const color = new THREE.Color();
 
   // Pebbles across the whole field.
   const pebbleGeo = new THREE.IcosahedronGeometry(0.11, 0);
@@ -321,8 +323,6 @@ function createScatter(scene) {
     flatShading: true,
   });
   const pebbles = new THREE.InstancedMesh(pebbleGeo, pebbleMat, 170);
-  const dummy = new THREE.Object3D();
-  const color = new THREE.Color();
   for (let i = 0; i < 170; i++) {
     const angle = Math.random() * Math.PI * 2;
     const radius = Math.sqrt(Math.random()) * 30;
@@ -337,6 +337,13 @@ function createScatter(scene) {
   }
   pebbles.instanceMatrix.needsUpdate = true;
   scene.add(pebbles);
+
+}
+
+function scatterGrass(scene) {
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const dummy = new THREE.Object3D();
+  const color = new THREE.Color();
 
   // Dry grass tufts around the field, denser further out.
   const tuftGeo = new THREE.ConeGeometry(0.1, 0.62, 4, 1);
@@ -362,6 +369,11 @@ function createScatter(scene) {
   tufts.instanceMatrix.needsUpdate = true;
   scene.add(tufts);
 
+}
+
+function scatterRocks(scene) {
+  const rand = (min, max) => min + Math.random() * (max - min);
+
   // A few boulders for depth.
   const rockMat = new THREE.MeshStandardMaterial({
     color: 0x9a8265,
@@ -381,7 +393,7 @@ function createScatter(scene) {
   }
 }
 
-function createBackdrop(scene) {
+function backdropMountains(scene) {
   // Hazy mountains far behind the field.
   const mountainMat = new THREE.MeshStandardMaterial({
     color: 0x9aa7c4,
@@ -402,6 +414,9 @@ function createBackdrop(scene) {
     scene.add(mountain);
   }
 
+}
+
+function backdropClouds(scene) {
   // Cartoon clouds.
   const cloudMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -447,15 +462,15 @@ export function buildWorld(scene, renderer) {
   const ground = time('ground', () => createGround(scene, renderer));
   const holes = time('holes', () => createHoles(scene));
 
-  // Everything below is decoration. It costs a lot of draw calls on phones, so
-  // main.js builds it only after the playable field is already on screen.
-  let decorBuilt = false;
-  const buildDecor = () => {
-    if (decorBuilt) return;
-    decorBuilt = true;
-    createScatter(scene);
-    createBackdrop(scene);
-  };
+  // Decoration is added one step at a time by main.js, after the playable
+  // field is on screen, so no single long task blocks the first paint.
+  const decorSteps = [
+    () => scatterPebbles(scene),
+    () => scatterGrass(scene),
+    () => scatterRocks(scene),
+    () => backdropMountains(scene),
+    () => backdropClouds(scene),
+  ];
 
-  return { sun, holes, ground, buildDecor, timings };
+  return { sun, holes, ground, decorSteps, timings };
 }

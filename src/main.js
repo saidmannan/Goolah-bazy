@@ -83,23 +83,24 @@ document.addEventListener(
 );
 
 let firstFrame = true;
-let decorQueued = false;
 const clock = new THREE.Clock();
 
-// Cosmetic props (grass, pebbles, rocks, mountains, clouds) are built after the
-// field is on screen: phones paint the playable scene much sooner this way.
+// Cosmetic props (pebbles, grass, rocks, mountains, clouds) are added one small
+// step at a time after the field is on screen. Chunking keeps the main thread
+// responsive, so phones paint and respond immediately instead of freezing.
 function queueDecor() {
-  if (decorQueued || typeof world.buildDecor !== 'function') return;
-  decorQueued = true;
-  const run = () => {
+  const steps = Array.isArray(world.decorSteps) ? world.decorSteps.slice() : [];
+  const runNext = () => {
+    const step = steps.shift();
+    if (!step) return;
     try {
-      world.buildDecor();
+      step();
     } catch (error) {
       console.warn('[goolah-bazy] decoration failed', error);
     }
+    if (steps.length) setTimeout(runNext, 90);
   };
-  if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 1500 });
-  else setTimeout(run, 120);
+  setTimeout(runNext, 140);
 }
 
 renderer.setAnimationLoop(() => {
