@@ -89,7 +89,7 @@ function createLights(scene) {
   const sun = new THREE.DirectionalLight(0xfff0cf, 2.4);
   sun.position.set(13, 20, 12);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 70;
   sun.shadow.camera.left = -18;
@@ -438,8 +438,16 @@ export function buildWorld(scene, renderer) {
   const sun = createLights(scene);
   const ground = createGround(scene, renderer);
   const holes = createHoles(scene);
-  createScatter(scene);
-  createBackdrop(scene);
 
-  return { sun, holes, ground };
+  // Everything below is decoration. It costs a lot of draw calls on phones, so
+  // main.js builds it only after the playable field is already on screen.
+  let decorBuilt = false;
+  const buildDecor = () => {
+    if (decorBuilt) return;
+    decorBuilt = true;
+    createScatter(scene);
+    createBackdrop(scene);
+  };
+
+  return { sun, holes, ground, buildDecor };
 }

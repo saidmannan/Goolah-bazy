@@ -74,7 +74,24 @@ document.addEventListener(
 );
 
 let firstFrame = true;
+let decorQueued = false;
 const clock = new THREE.Clock();
+
+// Cosmetic props (grass, pebbles, rocks, mountains, clouds) are built after the
+// field is on screen: phones paint the playable scene much sooner this way.
+function queueDecor() {
+  if (decorQueued || typeof world.buildDecor !== 'function') return;
+  decorQueued = true;
+  const run = () => {
+    try {
+      world.buildDecor();
+    } catch (error) {
+      console.warn('[goolah-bazy] decoration failed', error);
+    }
+  };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 1500 });
+  else setTimeout(run, 120);
+}
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -84,6 +101,7 @@ renderer.setAnimationLoop(() => {
   if (firstFrame) {
     firstFrame = false;
     ui.hideLoader();
+    queueDecor();
   }
 });
 
