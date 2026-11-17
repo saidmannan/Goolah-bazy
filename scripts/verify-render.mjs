@@ -76,11 +76,25 @@ try {
       version: ctx.getParameter(ctx.VERSION),
       width: canvas.width,
       height: canvas.height,
+      cssWidth: Math.round(canvas.getBoundingClientRect().width),
+      cssHeight: Math.round(canvas.getBoundingClientRect().height),
     };
   });
   check('webgl context available', gl.ok === true);
   check('no gl error after first frames', gl.error === 0, `gl.getError()=${gl.error}`);
-  check('canvas has real pixel size', gl.width > 300 && gl.height > 300, JSON.stringify(gl));
+  // Low-end GPUs render at a reduced pixel ratio, so the backing store is
+  // compared against the CSS size instead of assuming a 1:1 canvas.
+  const tracksViewport =
+    gl.width >= gl.cssWidth * 0.4 &&
+    gl.height >= gl.cssHeight * 0.4 &&
+    gl.width <= gl.cssWidth * 4 &&
+    gl.height <= gl.cssHeight * 4;
+  check('canvas backing store tracks the viewport', tracksViewport, JSON.stringify(gl));
+  check(
+    'canvas is not the default 300x150',
+    !(gl.width === 300 && gl.height === 150),
+    JSON.stringify(gl)
+  );
   check(
     'no shader/program console errors',
     !consoleErrors.some((t) => /shader|program|webgl/i.test(t)),
