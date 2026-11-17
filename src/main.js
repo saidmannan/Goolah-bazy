@@ -18,18 +18,38 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance',
   alpha: false,
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+// Software renderers (headless checkers, very weak devices) cannot afford the
+// full profile: they get a lighter scene so the page stays responsive instead
+// of saturating the main thread with long frames.
+function detectGpuTier(rendererInstance) {
+  try {
+    const gl = rendererInstance.getContext();
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || '') : '';
+    return { low: /swiftshader|llvmpipe|software|basic render/i.test(name), name };
+  } catch (error) {
+    return { low: false, name: '' };
+  }
+}
+
+const gpu = detectGpuTier(renderer);
+const LOW_END = gpu.low;
+const MAX_PIXEL_RATIO = LOW_END ? 1 : 2;
+const FRAME_INTERVAL = LOW_END ? 1000 / 30 : 0;
+
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = !LOW_END;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(56, 1, 0.1, 400);
 
 const ui = new UI();
-mark('renderer');
+mark(`renderer gpu=${gpu.name || 'unknown'} low=${LOW_END}`);
 const world = buildWorld(scene, renderer);
 mark(`world ${JSON.stringify(world.timings)}`);
 const game = new Game({ scene, camera, renderer, world, ui });
@@ -53,7 +73,7 @@ function resize() {
   const height = window.innerHeight;
   const aspect = width / height;
 
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
   renderer.setSize(width, height, false);
   camera.aspect = aspect;
   camera.fov = aspect < 1 ? 60 : 50;
@@ -83,6 +103,7 @@ document.addEventListener(
 );
 
 let firstFrame = true;
+let lastFrameTime = 0;
 const clock = new THREE.Clock();
 
 // Cosmetic props (pebbles, grass, rocks, mountains, clouds) are added one small
@@ -98,12 +119,16 @@ function queueDecor() {
     } catch (error) {
       console.warn('[goolah-bazy] decoration failed', error);
     }
-    if (steps.length) setTimeout(runNext, 90);
+    if (steps.length) setTimeout(runNext, LOW_END ? 240 : 90);
   };
   setTimeout(runNext, 140);
 }
 
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((time) => {
+  // On weak GPUs skip excess frames so input, checks and layout still get time.
+  if (FRAME_INTERVAL && time - lastFrameTime < FRAME_INTERVAL) return;
+  lastFrameTime = time;
+
   const dt = Math.min(clock.getDelta(), 0.05);
   game.update(dt);
   renderer.render(scene, camera);
