@@ -3,7 +3,9 @@ RUN apk upgrade --no-cache
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
-COPY . .
+# Copy only sources so local node_modules/dist never enter the image.
+COPY index.html vite.config.js server.js ./
+COPY src ./src
 # The build needs dev dependencies; they are removed before the copy below.
 RUN npm run build && npm prune --omit=dev
 FROM node:26-alpine
