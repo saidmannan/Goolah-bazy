@@ -1,0 +1,13 @@
+{
+  "name": "goolah-bazy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Goolah Bazy - 3D cartoon prototype of the traditional Afghan team game",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "start": "node server.js"
+  }
+}
