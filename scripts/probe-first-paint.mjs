@@ -26,16 +26,24 @@ try {
   });
   const page = await context.newPage();
 
+  const throttle = Number(process.env.THROTTLE || 1);
+  if (throttle > 1) {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle });
+  }
+
+  const phaseLogs = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') problems.push(`console: ${msg.text()}`);
+    else if (msg.text().includes('[goolah-bazy]')) phaseLogs.push(msg.text());
+  });
   page.on('response', (res) => {
     if (res.status() >= 400) problems.push(`${res.status()} ${res.url()}`);
   });
   page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`));
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') problems.push(`console: ${msg.text()}`);
-  });
 
   const t0 = Date.now();
-  await page.goto(TARGET, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${TARGET}${TARGET.includes('?') ? '&' : '?'}debug=1`, { waitUntil: 'domcontentloaded' });
 
   let firstSample = null;
   let lastSample = null;
@@ -86,6 +94,8 @@ try {
         loaderHiddenAfterMs: loaderHiddenAt,
         firstSample,
         lastSample,
+        throttle,
+        phaseLogs,
         problems: problems.slice(0, 8),
       },
       null,

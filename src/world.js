@@ -431,13 +431,21 @@ function createBackdrop(scene) {
 /* ----------------------------------------------------------------- build --- */
 
 export function buildWorld(scene, renderer) {
+  const timings = {};
+  const time = (label, fn) => {
+    const started = performance.now();
+    const result = fn();
+    timings[label] = Math.round(performance.now() - started);
+    return result;
+  };
+
   scene.fog = new THREE.Fog(0xe4c69b, 55, 165);
 
-  scene.add(createSky());
-  createEnvironment(scene, renderer);
-  const sun = createLights(scene);
-  const ground = createGround(scene, renderer);
-  const holes = createHoles(scene);
+  time('sky', () => scene.add(createSky()));
+  time('environment', () => createEnvironment(scene, renderer));
+  const sun = time('lights', () => createLights(scene));
+  const ground = time('ground', () => createGround(scene, renderer));
+  const holes = time('holes', () => createHoles(scene));
 
   // Everything below is decoration. It costs a lot of draw calls on phones, so
   // main.js builds it only after the playable field is already on screen.
@@ -449,5 +457,5 @@ export function buildWorld(scene, renderer) {
     createBackdrop(scene);
   };
 
-  return { sun, holes, ground, buildDecor };
+  return { sun, holes, ground, buildDecor, timings };
 }

@@ -6,6 +6,12 @@ import { UI } from './ui.js';
 
 const canvas = document.getElementById('scene');
 
+const DEBUG = new URLSearchParams(window.location.search).has('debug');
+const bootStart = performance.now();
+const mark = (label) => {
+  if (DEBUG) console.info(`[goolah-bazy] ${label} ${Math.round(performance.now() - bootStart)}ms`);
+};
+
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: window.devicePixelRatio < 2,
@@ -23,10 +29,13 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(56, 1, 0.1, 400);
 
 const ui = new UI();
+mark('renderer');
 const world = buildWorld(scene, renderer);
+mark(`world ${JSON.stringify(world.timings)}`);
 const game = new Game({ scene, camera, renderer, world, ui });
 try {
   game.init();
+  mark('game');
 } catch (error) {
   // Never leave the loading veil covering the screen if setup fails.
   console.error('[goolah-bazy] init failed', error);
@@ -101,6 +110,7 @@ renderer.setAnimationLoop(() => {
   if (firstFrame) {
     firstFrame = false;
     ui.hideLoader();
+    mark('first-frame');
     queueDecor();
   }
 });
