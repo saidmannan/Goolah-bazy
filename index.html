@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#20140c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="description"
+      content="Goolah Bazy - a 3D cartoon prototype of the traditional Afghan team game of holes, goolahs and dusty ground."
+    />
+    <title>Goolah Bazy — 3D Prototype</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene" aria-label="Goolah Bazy 3D playing field"></canvas>
+
+      <div class="hud">
+        <div class="scoreboard">
+          <div class="score-card team-a" id="cardA">
+            <div class="team-line"><span class="team-dot"></span><span class="team-name">BLUE</span></div>
+            <div class="score-line">
+              <button class="score-btn minus" data-team="0" data-delta="-1" type="button" aria-label="Remove one point from Blue team">−</button>
+              <div class="score-value" id="scoreA">0</div>
+              <button class="score-btn plus" data-team="0" data-delta="1" type="button" aria-label="Add one point to Blue team">+</button>
+            </div>
+            <div class="chips" id="chipsA">
+              <span class="chip" data-player="0">P1</span>
+              <span class="chip" data-player="1">P2</span>
+            </div>
+            <div class="progress"><span id="progA"></span></div>
+          </div>
+
+          <div class="target-badge" aria-label="Target is 21 points">
+            <span class="target-num">21</span>
+            <span class="target-label">TARGET</span>
+          </div>
+
+          <div class="score-card team-b" id="cardB">
+            <div class="team-line"><span class="team-dot"></span><span class="team-name">ORANGE</span></div>
+            <div class="score-line">
+              <button class="score-btn minus" data-team="1" data-delta="-1" type="button" aria-label="Remove one point from Orange team">−</button>
+              <div class="score-value" id="scoreB">0</div>
+              <button class="score-btn plus" data-team="1" data-delta="1" type="button" aria-label="Add one point to Orange team">+</button>
+            </div>
+            <div class="chips" id="chipsB">
+              <span class="chip" data-player="0">P1</span>
+              <span class="chip" data-player="1">P2</span>
+            </div>
+            <div class="progress"><span id="progB"></span></div>
+          </div>
+        </div>
+
+        <div class="turn-banner" id="turnBanner" role="status" aria-live="polite">
+          <span class="turn-pulse"></span>
+          <span class="turn-text" id="turnText">Blue · Player 1</span>
+          <span class="turn-hint" id="turnHint">Swipe to throw</span>
+        </div>
+
+        <div class="bottom">
+          <div class="power" id="powerWrap">
+            <span class="power-label">POWER</span>
+            <div class="power-track"><span id="powerFill"></span></div>
+          </div>
+          <div class="bottom-buttons">
+            <button class="pill" id="rulesBtn" type="button">How to play</button>
+            <button class="pill ghost" id="resetBtn" type="button">Reset</button>
+          </div>
+        </div>
+
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="overlay" id="startOverlay">
+        <div class="panel start-panel">
+          <p class="eyebrow">Traditional Afghan Team Game</p>
+          <h1 class="title">Goolah<br /><span>Bazy</span></h1>
+          <p class="lede">Four holes in a line. Four heavy goolahs. Two teams of two.</p>
+          <ul class="facts">
+            <li><b>4</b> holes in a straight line</li>
+            <li><b>4</b> metallic goolahs</li>
+            <li><b>2</b> teams of two players</li>
+            <li><b>21</b> points to win</li>
+          </ul>
+          <button class="cta" id="playBtn" type="button">Play</button>
+          <p class="fineprint">
+            First prototype: the field, the layout and the throwing controls. Official scoring
+            rules will be wired in from your rule set — until then the scoreboard is kept by hand.
+          </p>
+        </div>
+      </div>
+
+      <div class="overlay hidden" id="rulesOverlay">
+        <div class="panel">
+          <h2>How to play</h2>
+          <ol class="rules">
+            <li><b>Swipe up</b> anywhere on the field to throw your goolah toward the holes.</li>
+            <li><b>Swipe left or right</b> while dragging to aim across the line of holes.</li>
+            <li>The <b>longer the swipe</b>, the harder the throw. The power bar shows the force.</li>
+            <li>Your goolah stays on the ground, so later throws can knock it away.</li>
+            <li>A goolah that drops into a hole is out of play for that round.</li>
+            <li>After all four goolahs are thrown, start the next round.</li>
+          </ol>
+          <p class="fineprint">
+            Scoring: the traditional rule set has not been added yet, so points are recorded with
+            the + and − buttons on each team card. First team to 21 wins.
+          </p>
+          <button class="cta small" id="closeRules" type="button">Got it</button>
+        </div>
+      </div>
+
+      <div class="overlay hidden" id="roundOverlay">
+        <div class="panel compact">
+          <h2 id="roundTitle">Round complete</h2>
+          <p class="lede" id="roundSub">All four goolahs have been thrown.</p>
+          <button class="cta" id="nextRoundBtn" type="button">Next round</button>
+        </div>
+      </div>
+
+      <div class="overlay hidden" id="winOverlay">
+        <div class="panel compact win">
+          <p class="eyebrow">21 points</p>
+          <h2 id="winTitle">Blue team wins</h2>
+          <p class="lede" id="winSub">Well thrown.</p>
+          <button class="cta" id="playAgainBtn" type="button">Play again</button>
+        </div>
+      </div>
+
+      <div class="loader" id="loader">
+        <div class="loader-inner">
+          <div class="loader-ball"></div>
+          <p>Preparing the field…</p>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
