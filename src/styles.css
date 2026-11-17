@@ -694,3 +694,204 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* ==========================================================================
+   Phase 1 responsive layer
+   ========================================================================== */
+
+/* The HUD used to spread three blocks evenly, which parked the turn banner in
+   the middle of the screen. Keep the scoreboard and banner together at the top
+   so the line of mats stays visible, and pin the controls to the bottom. */
+.hud {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.bottom {
+  margin-top: auto;
+}
+
+#scene {
+  cursor: grab;
+}
+
+#scene:active {
+  cursor: grabbing;
+}
+
+/* Comfortable touch targets; 44px is the smallest reliable target on iOS and
+   Android, and a mouse gets a bigger hit area too. */
+.score-btn {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.scoreboard,
+.turn-banner,
+.bottom {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ---- compact phones: iPhone SE, small Android --------------------------- */
+@media (max-width: 374px) {
+  .hud {
+    padding-left: calc(var(--safe-left) + 8px);
+    padding-right: calc(var(--safe-right) + 8px);
+    gap: 7px;
+  }
+
+  .scoreboard {
+    gap: 6px;
+  }
+
+  .score-card {
+    padding: 6px 7px 8px;
+    border-radius: 15px;
+  }
+
+  .team-name {
+    font-size: 10px;
+  }
+
+  .score-value {
+    font-size: 22px;
+  }
+
+  .score-btn {
+    min-width: 34px;
+    min-height: 34px;
+    font-size: 15px;
+  }
+
+  .turn-banner {
+    padding: 6px 10px;
+  }
+
+  .turn-text {
+    font-size: 12px;
+  }
+
+  .turn-hint {
+    font-size: 10px;
+  }
+
+  .power {
+    padding: 7px 10px;
+  }
+
+  .pill {
+    padding: 10px 12px;
+    font-size: 11px;
+  }
+}
+
+/* ---- landscape phones: very little height, so compress the HUD ---------- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .hud {
+    padding-top: calc(var(--safe-top) + 6px);
+    padding-bottom: calc(var(--safe-bottom) + 6px);
+    gap: 6px;
+  }
+
+  .scoreboard {
+    max-width: 520px;
+  }
+
+  .score-card {
+    padding: 5px 8px 7px;
+  }
+
+  .score-value {
+    font-size: 20px;
+  }
+
+  .score-btn {
+    min-width: 34px;
+    min-height: 34px;
+  }
+
+  .turn-banner {
+    padding: 5px 10px;
+  }
+
+  .turn-hint {
+    font-size: 10px;
+  }
+
+  .bottom {
+    max-width: 520px;
+    gap: 6px;
+  }
+
+  .pill {
+    padding: 8px 12px;
+    font-size: 11px;
+  }
+}
+
+/* ---- tablets ----------------------------------------------------------- */
+@media (min-width: 720px) {
+  .hud {
+    padding-left: calc(var(--safe-left) + 20px);
+    padding-right: calc(var(--safe-right) + 20px);
+    gap: 12px;
+  }
+
+  .scoreboard {
+    max-width: 640px;
+    gap: 12px;
+  }
+
+  .score-card {
+    padding: 10px 12px 12px;
+  }
+
+  .team-name {
+    font-size: 13px;
+  }
+
+  .score-btn {
+    min-width: 46px;
+    min-height: 46px;
+    font-size: 19px;
+  }
+
+  .turn-banner {
+    max-width: 430px;
+    padding: 9px 16px;
+    font-size: 15px;
+  }
+
+  .bottom {
+    max-width: 640px;
+  }
+
+  .power {
+    padding: 10px 14px;
+  }
+
+  .power-track {
+    height: 11px;
+  }
+
+  .pill {
+    padding: 12px 18px;
+    font-size: 13px;
+  }
+}
+
+/* ---- desktop ----------------------------------------------------------- */
+@media (min-width: 1024px) {
+  .scoreboard {
+    max-width: 700px;
+  }
+
+  .turn-banner {
+    max-width: 470px;
+  }
+
+  .bottom {
+    max-width: 560px;
+  }
+}
