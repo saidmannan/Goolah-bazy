@@ -165,8 +165,9 @@ renderer.setAnimationLoop((time) => {
     ui.hideLoader();
     mark('first-frame');
     queueDecor();
-    // Keep full-rate frames while the scenery steps are still being built.
-    holdAwake(LOW_END ? 4000 : 2200);
+    // Only a brief full-rate window: the decor steps are small and can land on
+    // idle frames, so the main thread frees up right after the first paint.
+    holdAwake(LOW_END ? 400 : 700);
   }
 });
 
