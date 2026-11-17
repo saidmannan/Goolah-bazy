@@ -48,16 +48,16 @@ export const CONFIG = {
   bounceThreshold: 1.2,
   // ...but a heavy ball keeps most of its speed coming off the ground.
   bounceFriction: 0.88,
-  // Rolling resistance in m/s². Tuned so a full-power throw carries past mat 4
-  // while the softest throw stops short of mat 1.
-  rollFriction: 13,
+  // Rolling resistance in m/s². Tuned so a full-power throw carries just past
+  // mat 4 (about 2 m beyond it) while the softest throw stops short of mat 1.
+  rollFriction: 18,
   // Steel against steel.
   ballRestitution: 0.92,
   sleepSpeed: 0.16,
 
   /* ------------------------------------------------------------- throws ---- */
   minSpeed: 4.5,
-  maxSpeed: 15.5,
+  maxSpeed: 14,
   minLift: 1.3,
   maxLift: 4.8,
   maxAimAngle: 0.35,
