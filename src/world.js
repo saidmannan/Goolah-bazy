@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { CONFIG, TEAMS } from './config.js';
 
 /* ------------------------------------------------------------------ sky --- */
 
@@ -231,81 +231,176 @@ function createGround(scene, renderer) {
   lane.receiveShadow = true;
   scene.add(lane);
 
-  // Throw lines at both ends.
+  // One shared throw line behind mat 1. Both players of the throwing team use it.
   const lineMat = new THREE.MeshBasicMaterial({
     color: 0xf3e2c2,
     transparent: true,
-    opacity: 0.42,
+    opacity: 0.46,
   });
-  for (const z of [CONFIG.throwZ, -CONFIG.throwZ]) {
-    const line = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 0.16), lineMat);
-    line.rotation.x = -Math.PI / 2;
-    line.position.set(0, 0.012, z);
-    scene.add(line);
+  const line = new THREE.Mesh(
+    new THREE.PlaneGeometry(CONFIG.throwLineHalfWidth * 2, 0.17),
+    lineMat
+  );
+  line.rotation.x = -Math.PI / 2;
+  line.position.set(0, 0.012, CONFIG.throwLineZ);
+  scene.add(line);
+
+  // Short ticks at each end so the line reads as a starting line, not a shadow.
+  for (const side of [-1, 1]) {
+    const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.52), lineMat);
+    tick.rotation.x = -Math.PI / 2;
+    tick.position.set(side * CONFIG.throwLineHalfWidth, 0.012, CONFIG.throwLineZ + 0.26);
+    scene.add(tick);
   }
 
   return { ground, lane };
 }
 
-/* ----------------------------------------------------------------- holes --- */
+/* ------------------------------------------------------------------ mats --- */
 
-function holeCanvas() {
+function matFloorCanvas() {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
   const ctx = canvas.getContext('2d');
   const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
-  grad.addColorStop(0, '#0a0603');
-  grad.addColorStop(0.55, '#1c1108');
-  grad.addColorStop(0.86, '#402a16');
+  grad.addColorStop(0, '#100904');
+  grad.addColorStop(0.6, '#241608');
+  grad.addColorStop(0.9, '#4a3119');
   grad.addColorStop(1, '#6b4726');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 128, 128);
   return canvas;
 }
 
-function createHoles(scene) {
-  const holes = [];
-  const holeTex = new THREE.CanvasTexture(holeCanvas());
-  holeTex.colorSpace = THREE.SRGBColorSpace;
+// Numbered puck drawn flat beside each mat: which mat it is, and whose it is.
+function matLabelCanvas(number, cssColor) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 128, 128);
 
-  const rimMat = new THREE.MeshStandardMaterial({ color: 0x6d4826, roughness: 0.95, metalness: 0 });
-  const moundMat = new THREE.MeshStandardMaterial({ color: 0x8a5f38, roughness: 1, metalness: 0 });
-  const innerMat = new THREE.MeshBasicMaterial({ map: holeTex, transparent: false });
+  ctx.beginPath();
+  ctx.arc(64, 64, 56, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(18, 11, 5, 0.62)';
+  ctx.fill();
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = cssColor;
+  ctx.stroke();
 
-  for (const z of CONFIG.holeZ) {
+  ctx.fillStyle = '#fff6e4';
+  ctx.font = 'bold 68px "Trebuchet MS", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(number), 64, 70);
+  return canvas;
+}
+
+// A flat plane on the ground, oriented so its artwork reads upright from the
+// throwing end of the field.
+function groundPlane(width, height) {
+  const geometry = new THREE.PlaneGeometry(width, height);
+  geometry.rotateX(-Math.PI / 2);
+  geometry.rotateY(Math.PI);
+  return geometry;
+}
+
+/**
+ * Four shallow circular mats in a straight line. Each is a real depression in
+ * the dirt (matDepth metres deep) with a pushed-up lip, a ring in the colour of
+ * the team that owns it, and its number painted beside it.
+ */
+function createMats(scene) {
+  const mats = [];
+  const floorTex = new THREE.CanvasTexture(matFloorCanvas());
+  floorTex.colorSpace = THREE.SRGBColorSpace;
+
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x5a3a1d,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 1, metalness: 0 });
+  const lipMat = new THREE.MeshStandardMaterial({ color: 0x8a5f38, roughness: 1, metalness: 0 });
+
+  CONFIG.matZ.forEach((z, index) => {
+    const teamIndex = CONFIG.matOwner[index];
+    const team = TEAMS[teamIndex];
+
     const group = new THREE.Group();
-    group.position.set(CONFIG.holeX, 0, z);
+    group.position.set(CONFIG.matX, 0, z);
 
-    const inner = new THREE.Mesh(new THREE.CircleGeometry(CONFIG.holeRadius, 28), innerMat);
-    inner.rotation.x = -Math.PI / 2;
-    inner.position.y = 0.014;
-    group.add(inner);
-
-    const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(CONFIG.holeRadius * 0.98, 0.055, 8, 30),
-      rimMat
+    // The dish: an open, slightly tapered cylinder sunk into the ground, so the
+    // mat reads as a shallow 5 cm depression instead of a painted circle.
+    const wall = new THREE.Mesh(
+      new THREE.CylinderGeometry(
+        CONFIG.matRadius,
+        CONFIG.matRadius * 0.66,
+        CONFIG.matDepth,
+        32,
+        1,
+        true
+      ),
+      wallMat
     );
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.y = 0.035;
-    rim.castShadow = false;
-    rim.receiveShadow = true;
-    group.add(rim);
+    wall.position.y = -CONFIG.matDepth / 2;
+    wall.receiveShadow = true;
+    group.add(wall);
 
-    const mound = new THREE.Mesh(
-      new THREE.TorusGeometry(CONFIG.holeRadius * 1.22, 0.085, 6, 26),
-      moundMat
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(CONFIG.matRadius * 0.66, 28),
+      floorMat
     );
-    mound.rotation.x = -Math.PI / 2;
-    mound.position.y = 0.03;
-    mound.scale.y = 0.45;
-    mound.receiveShadow = true;
-    group.add(mound);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -CONFIG.matDepth + 0.002;
+    floor.receiveShadow = true;
+    group.add(floor);
+
+    // Dirt pushed up around the lip by the depression.
+    const lip = new THREE.Mesh(
+      new THREE.TorusGeometry(CONFIG.matRadius, 0.042, 8, 30),
+      lipMat
+    );
+    lip.rotation.x = -Math.PI / 2;
+    lip.position.y = 0.008;
+    lip.scale.y = 0.55;
+    lip.receiveShadow = true;
+    group.add(lip);
+
+    // Ownership ring in the owning team's colour.
+    const ownerRing = new THREE.Mesh(
+      new THREE.RingGeometry(CONFIG.matRadius * 1.07, CONFIG.matRadius * 1.16, 40),
+      new THREE.MeshBasicMaterial({
+        color: team.color,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+      })
+    );
+    ownerRing.rotation.x = -Math.PI / 2;
+    ownerRing.position.y = 0.013;
+    group.add(ownerRing);
 
     scene.add(group);
-    holes.push(new THREE.Vector3(CONFIG.holeX, 0, z));
-  }
+    mats.push({
+      index,
+      teamIndex,
+      position: new THREE.Vector3(CONFIG.matX, 0, z),
+      group,
+    });
 
-  return holes;
+    // Number marker, flat on the ground to the side of the mat.
+    const labelTex = new THREE.CanvasTexture(matLabelCanvas(index + 1, team.css));
+    labelTex.colorSpace = THREE.SRGBColorSpace;
+    const label = new THREE.Mesh(
+      groundPlane(0.44, 0.44),
+      new THREE.MeshBasicMaterial({ map: labelTex, transparent: true, depthWrite: false })
+    );
+    label.position.set(CONFIG.matX + CONFIG.matRadius + 0.62, 0.016, z);
+    scene.add(label);
+  });
+
+  return mats;
 }
 
 /* ----------------------------------------------------------------- props --- */
