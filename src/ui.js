@@ -87,7 +87,7 @@ export class UI {
     this.el.turnBanner.classList.remove('blue', 'orange');
     this.el.turnBanner.classList.add(team.cssClass);
     this.el.turnText.textContent = `${team.name} · Player ${playerIndex + 1}`;
-    this.el.turnHint.textContent = 'Swipe up to throw';
+    this.el.turnHint.textContent = 'Drag to aim · release to throw';
   }
 
   setTurnHint(text) {
@@ -134,7 +134,8 @@ export class UI {
 
   showRoundEnd(round) {
     this.el.roundTitle.textContent = `Round ${round} complete`;
-    this.el.roundSub.textContent = 'All four goolahs have been thrown.';
+    this.el.roundSub.textContent =
+      'Both teams have thrown. Record the points with + and −, then continue.';
     this.el.roundOverlay.classList.remove('hidden');
   }
 
