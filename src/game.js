@@ -59,7 +59,7 @@ export class Game {
     canvas.addEventListener('pointercancel', this._onUp);
     canvas.addEventListener('pointerleave', this._onUp);
 
-    this.resetRound({ start: false });
+    this.startRound();
     this.updateCamera(0, true);
     this.ui.setScores(this.scores, CONFIG.targetScore);
   }

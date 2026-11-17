@@ -25,7 +25,14 @@ const camera = new THREE.PerspectiveCamera(56, 1, 0.1, 400);
 const ui = new UI();
 const world = buildWorld(scene, renderer);
 const game = new Game({ scene, camera, renderer, world, ui });
-game.init();
+try {
+  game.init();
+} catch (error) {
+  // Never leave the loading veil covering the screen if setup fails.
+  console.error('[goolah-bazy] init failed', error);
+  ui.hideLoader();
+  ui.toast('Could not prepare the field — please reload');
+}
 
 function resize() {
   const width = window.innerWidth;
