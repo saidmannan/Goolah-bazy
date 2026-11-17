@@ -35,7 +35,8 @@ function detectGpuTier(rendererInstance) {
 
 const gpu = detectGpuTier(renderer);
 const LOW_END = gpu.low;
-const MAX_PIXEL_RATIO = LOW_END ? 1 : 2;
+// Software rasterizers pay per pixel, so they render at half resolution.
+const MAX_PIXEL_RATIO = LOW_END ? 0.5 : 2;
 const FRAME_INTERVAL = LOW_END ? 1000 / 30 : 0;
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
