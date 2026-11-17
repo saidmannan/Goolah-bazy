@@ -50,7 +50,7 @@ const camera = new THREE.PerspectiveCamera(56, 1, 0.1, 400);
 
 const ui = new UI();
 mark(`renderer gpu=${gpu.name || 'unknown'} low=${LOW_END}`);
-const world = buildWorld(scene, renderer);
+const world = buildWorld(scene, renderer, { lowEnd: LOW_END });
 mark(`world ${JSON.stringify(world.timings)}`);
 const game = new Game({ scene, camera, renderer, world, ui });
 try {
