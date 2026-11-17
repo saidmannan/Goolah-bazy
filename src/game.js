@@ -1,10 +1,20 @@
 import * as THREE from 'three';
-import { CONFIG, TEAMS } from './config.js';
+import { CONFIG, TEAMS, homePosition, throwPosition } from './config.js';
+import {
+  createBody,
+  stepBallMotion,
+  resolveBallCollision,
+  simulateShot,
+  throwVelocity,
+} from './physics.js';
+import { turnAt } from './turn.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
+// Every throw travels down the line of mats, away from the shared throw line.
+const FORWARD = new THREE.Vector3(0, 0, 1);
+
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
-const _c = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 
@@ -19,7 +29,7 @@ export class Game {
     this.world = world;
     this.ui = ui;
 
-    this.holes = world.holes;
+    this.mats = Array.isArray(world.mats) ? world.mats : [];
     this.balls = [];
     this.effects = [];
     this.time = 0;
@@ -27,17 +37,17 @@ export class Game {
     this.scores = [0, 0];
     this.phase = 'intro'; // intro | ready | aiming | flying | roundEnd | gameover
     this.round = 1;
-    this.roundStartIndex = 0;
-    this.turnSeq = 0; // throws taken this round (0..3)
-    this.turnIndex = 0;
+    this.roundStartTeam = 0;
+    this.turnSeq = 0;
+    this.active = { teamIndex: 0, playerIndex: 0 };
     this.settleTimer = 0;
     this.turnLock = 0;
     this.inputEnabled = false;
 
-    this.aim = { dir: new THREE.Vector3(0, 0, -1), power: 0, angle: 0 };
+    this.aim = { dir: new THREE.Vector3(0, 0, 1), power: 0, angle: 0 };
     this.pointer = null;
-    this.camLook = new THREE.Vector3(0, 0.2, 1.6);
-    this.camera.position.set(0, 10.4, 19.6);
+    this.camLook = new THREE.Vector3(0, 0.35, 1.1);
+    this.camera.position.set(0, 9.4, -14.6);
 
     this._onDown = this._onDown.bind(this);
     this._onMove = this._onMove.bind(this);
@@ -59,7 +69,9 @@ export class Game {
     canvas.addEventListener('pointercancel', this._onUp);
     canvas.addEventListener('pointerleave', this._onUp);
 
-    this.startRound();
+    // Before the first throw, the goolahs wait beside the mats they belong to.
+    this.balls.forEach((ball) => this.placeAtHome(ball));
+
     this.updateCamera(0, true);
     this.ui.setScores(this.scores, CONFIG.targetScore);
   }
@@ -95,8 +107,8 @@ export class Game {
         band.rotation.x = Math.PI / 2;
         group.add(band);
 
-        const spot = this.throwSpot(teamIndex, playerIndex);
-        group.position.copy(spot);
+        const home = homePosition(teamIndex, playerIndex);
+        group.position.copy(home);
         this.scene.add(group);
 
         this.balls.push({
@@ -104,21 +116,37 @@ export class Game {
           mesh,
           teamIndex,
           playerIndex,
-          state: 'held', // held | live | sinking | hole
-          vel: new THREE.Vector3(),
-          sink: { from: new THREE.Vector3(), to: new THREE.Vector3(), t: 0 },
+          // home | staged | live | settled | mat
+          state: 'home',
+          matIndex: -1,
+          body: createBody(home.x, home.y, home.z, CONFIG.ballRadius),
         });
       }
     });
   }
 
-  throwSpot(teamIndex, playerIndex) {
-    const sign = teamIndex === 0 ? 1 : -1;
-    return new THREE.Vector3(
-      CONFIG.throwX[playerIndex] * (teamIndex === 0 ? 1 : -1),
-      CONFIG.ballRadius,
-      CONFIG.throwZ * sign
-    );
+  ballFor(teamIndex, playerIndex) {
+    return this.balls[teamIndex * CONFIG.playerCount + playerIndex];
+  }
+
+  placeAtHome(ball) {
+    ball.state = 'home';
+    ball.matIndex = -1;
+    ball.body.vel.set(0, 0, 0);
+    ball.body.resting = true;
+    ball.body.pos.copy(homePosition(ball.teamIndex, ball.playerIndex));
+    ball.group.visible = true;
+    ball.group.position.copy(ball.body.pos);
+  }
+
+  /** Put a goolah on the shared throw line, ready to be thrown. */
+  stageOnLine(ball) {
+    ball.state = 'staged';
+    ball.matIndex = -1;
+    ball.body.vel.set(0, 0, 0);
+    ball.body.resting = true;
+    ball.body.pos.copy(throwPosition(ball.playerIndex));
+    ball.group.position.copy(ball.body.pos);
   }
 
   buildAimHelpers() {
@@ -146,21 +174,46 @@ export class Game {
     // Ring around the goolah being aimed.
     this.aimRing = new THREE.Mesh(
       new THREE.RingGeometry(CONFIG.ballRadius * 1.25, CONFIG.ballRadius * 1.62, 32),
-      new THREE.MeshBasicMaterial({ color: TEAMS[0].color, transparent: true, opacity: 0.7, depthWrite: false })
+      new THREE.MeshBasicMaterial({
+        color: TEAMS[0].color,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+      })
     );
     this.aimRing.rotation.x = -Math.PI / 2;
     this.aimRing.position.y = 0.025;
     this.aimRing.visible = false;
     this.scene.add(this.aimRing);
 
-    // Dotted flight preview.
+    // Dotted flight preview, sampled from the same integrator the game uses.
     const dotGeo = new THREE.SphereGeometry(0.075, 8, 6);
-    const dotMat = new THREE.MeshBasicMaterial({ color: 0xfff3d0, transparent: true, opacity: 0.9, depthWrite: false });
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0xfff3d0,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
     this.dots = new THREE.InstancedMesh(dotGeo, dotMat, 26);
     this.dots.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.dots.visible = false;
     this.dots.frustumCulled = false;
     this.scene.add(this.dots);
+
+    // Where the preview says the goolah will stop.
+    this.restRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.2, 0.28, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff3d0,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      })
+    );
+    this.restRing.rotation.x = -Math.PI / 2;
+    this.restRing.position.y = 0.02;
+    this.restRing.visible = false;
+    this.scene.add(this.restRing);
   }
 
   buildMarker() {
@@ -186,50 +239,53 @@ export class Game {
   /* --------------------------------------------------------------- turn --- */
 
   get activeTeamIndex() {
-    return this.turnIndex % 2;
+    return this.active.teamIndex;
   }
 
   get activePlayerIndex() {
-    return Math.floor(this.turnIndex / 2) % 2;
+    return this.active.playerIndex;
   }
 
   get activeBall() {
-    return this.balls[this.activeTeamIndex * CONFIG.playerCount + this.activePlayerIndex];
-  }
-
-  fieldAxis() {
-    return this.activeTeamIndex === 0 ? _a.set(0, 0, -1) : _a.set(0, 0, 1);
+    return this.ballFor(this.active.teamIndex, this.active.playerIndex);
   }
 
   startRound() {
-    this.balls.forEach((ball) => {
-      ball.state = 'held';
-      ball.vel.set(0, 0, 0);
-      ball.group.visible = true;
-      ball.group.scale.setScalar(1);
-      ball.group.position.copy(this.throwSpot(ball.teamIndex, ball.playerIndex));
-      ball.mesh.quaternion.identity();
-    });
+    // The team that throws first alternates every round.
+    this.roundStartTeam = (this.round - 1) % 2;
+    this.turnSeq = 0;
+    this.balls.forEach((ball) => this.placeAtHome(ball));
     this.effects.forEach((fx) => {
       fx.mesh.visible = false;
+      fx.active = false;
     });
-    this.turnSeq = 0;
-    this.roundStartIndex = (this.round - 1) % 2;
-    this.turnIndex = this.roundStartIndex;
-    this.settleTimer = 0;
     this.startTurn();
   }
 
   startTurn() {
-    const team = TEAMS[this.activeTeamIndex];
+    const turn = turnAt(this.turnSeq, this.roundStartTeam, CONFIG.playerCount);
+    this.active = { teamIndex: turn.teamIndex, playerIndex: turn.playerIndex };
+    const team = TEAMS[turn.teamIndex];
+
+    // Both players of the throwing team throw from the same starting line, so
+    // when their block begins both of that team's goolahs are staged on it.
+    if (turn.throwInBlock === 0) {
+      for (let p = 0; p < CONFIG.playerCount; p++) {
+        const mate = this.ballFor(turn.teamIndex, p);
+        if (mate.state === 'home') this.stageOnLine(mate);
+      }
+    }
+
     const ball = this.activeBall;
-    ball.group.position.copy(this.throwSpot(ball.teamIndex, ball.playerIndex));
+    if (ball.state !== 'staged') this.stageOnLine(ball);
 
     this.phase = 'ready';
-    this.turnLock = 0.55;
+    this.turnLock = 0.5;
     this.aim.power = 0;
+    this.aim.angle = 0;
+    this.aim.dir.copy(FORWARD);
     this.ui.setPower(0);
-    this.ui.setTurn(this.activeTeamIndex, this.activePlayerIndex);
+    this.ui.setTurn(turn.teamIndex, turn.playerIndex);
     this.ui.setScores(this.scores, CONFIG.targetScore);
     this.colorAimHelpers(team.color);
     this.aimRing.visible = true;
@@ -241,14 +297,10 @@ export class Game {
     this.turnSeq += 1;
     if (this.turnSeq >= CONFIG.throwsPerRound) {
       this.phase = 'roundEnd';
-      this.marker.visible = false;
-      this.aimRing.visible = false;
-      this.aimGroup.visible = false;
-      this.dots.visible = false;
+      this.hideAimHelpers();
       this.ui.showRoundEnd(this.round);
       return;
     }
-    this.turnIndex += 1;
     this.startTurn();
   }
 
@@ -258,37 +310,60 @@ export class Game {
     this.startRound();
   }
 
+  hideAimHelpers() {
+    this.aimGroup.visible = false;
+    this.dots.visible = false;
+    this.restRing.visible = false;
+    this.aimRing.visible = false;
+    this.marker.visible = false;
+  }
+
   /* -------------------------------------------------------------- throw --- */
 
   throwBall(power) {
     const ball = this.activeBall;
-    const dir = this.aim.dir;
-    const speed = CONFIG.minSpeed + power * (CONFIG.maxSpeed - CONFIG.minSpeed);
-    const lift = CONFIG.minLift + power * (CONFIG.maxLift - CONFIG.minLift);
-
-    ball.vel.set(dir.x * speed, lift, dir.z * speed);
+    ball.body.vel.copy(throwVelocity(this.aim.dir, power, CONFIG));
+    ball.body.resting = false;
     ball.state = 'live';
+
     this.phase = 'flying';
     this.settleTimer = 0;
     this.aim.power = 0;
     this.ui.setPower(0);
-    this.ui.setTurnHint('In the air…');
-    this.aimGroup.visible = false;
-    this.dots.visible = false;
-    this.aimRing.visible = false;
-    this.marker.visible = false;
-    this.aimRing.visible = false;
-    this.spawnDust(ball.group.position, 0.5, 0.35);
+    this.ui.setTurnHint('Rolling…');
+    this.hideAimHelpers();
+    this.spawnDust(ball.body.pos, 0.5, 0.35);
   }
 
   /* ------------------------------------------------------------ physics --- */
+
+  /**
+   * Ground height at a point: flat dirt, dipping into each mat dish. This makes
+   * the 5 cm depressions part of the physics instead of decoration.
+   */
+  surfaceHeightAt = (x, z) => {
+    let height = 0;
+    for (const mat of this.mats) {
+      const dx = x - mat.position.x;
+      const dz = z - mat.position.z;
+      const distance = Math.hypot(dx, dz);
+      if (distance >= CONFIG.matRadius) continue;
+      const t = 1 - distance / CONFIG.matRadius;
+      const dip = -CONFIG.matDepth * (t * t * (3 - 2 * t));
+      if (dip < height) height = dip;
+    }
+    return height;
+  };
+
+  inPlay(ball) {
+    return ball.state === 'live' || ball.state === 'settled' || ball.state === 'mat';
+  }
 
   update(dt) {
     this.time += dt;
     if (this.turnLock > 0) this.turnLock -= dt;
 
     this.stepPhysics(dt);
-    this.updateSinking(dt);
     this.updateCamera(dt);
     this.updateMarker();
     this.updateEffects(dt);
@@ -306,145 +381,87 @@ export class Game {
   stepPhysics(dt) {
     const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
     const h = dt / steps;
+
     for (let i = 0; i < steps; i++) {
-      for (const ball of this.balls) this.stepBall(ball, h);
+      for (const ball of this.balls) {
+        if (ball.state !== 'live') continue;
+        const { impact } = stepBallMotion(ball.body, h, CONFIG, this.surfaceHeightAt);
+        if (impact > 2.2) this.spawnDust(ball.body.pos, 0.6, 0.3);
+        if (ball.body.resting) this.settleBall(ball);
+      }
       this.resolveCollisions();
-      this.checkHoles();
-    }
-  }
-
-  stepBall(ball, h) {
-    if (ball.state !== 'live') return;
-    const R = CONFIG.ballRadius;
-
-    ball.vel.y -= CONFIG.gravity * h;
-    ball.vel.multiplyScalar(Math.max(0, 1 - CONFIG.airDrag * h));
-    ball.group.position.addScaledVector(ball.vel, h);
-
-    if (ball.group.position.y <= R) {
-      ball.group.position.y = R;
-      if (ball.vel.y < 0) {
-        const impact = -ball.vel.y;
-        ball.vel.y = impact > 1.4 ? impact * CONFIG.restitution : 0;
-        ball.vel.x *= CONFIG.bounceFriction;
-        ball.vel.z *= CONFIG.bounceFriction;
-        if (impact > 2.2) this.spawnDust(ball.group.position, 0.6, 0.3);
-      }
-      const speed = Math.hypot(ball.vel.x, ball.vel.z);
-      if (speed > 0.0001) {
-        const f = Math.max(0, speed - CONFIG.rollFriction * h) / speed;
-        ball.vel.x *= f;
-        ball.vel.z *= f;
-      }
     }
 
-    // Rolling spin.
-    const speed = Math.hypot(ball.vel.x, ball.vel.z);
-    if (speed > 0.02 && ball.group.position.y <= R + 0.02) {
-      _b.set(ball.vel.z, 0, -ball.vel.x).normalize();
-      _q.setFromAxisAngle(_b, (speed * h) / R);
-      ball.mesh.quaternion.premultiply(_q);
-    }
-
-    // Keep play near the field.
-    if (Math.abs(ball.group.position.x) > 32 || Math.abs(ball.group.position.z) > 36) {
-      ball.vel.set(0, 0, 0);
-    }
-    if (ball.vel.lengthSq() < 0.0005 && ball.group.position.y <= R + 0.01) {
-      ball.vel.set(0, 0, 0);
-    }
+    this.syncVisuals(dt);
   }
 
   resolveCollisions() {
-    const R = CONFIG.ballRadius;
-    const minDist = R * 2;
     for (let i = 0; i < this.balls.length; i++) {
       const a = this.balls[i];
-      if (a.state === 'held' || a.state === 'hole' || a.state === 'sinking') continue;
+      if (!this.inPlay(a)) continue;
       for (let j = i + 1; j < this.balls.length; j++) {
         const b = this.balls[j];
-        if (b.state === 'held' || b.state === 'hole' || b.state === 'sinking') continue;
-
-        _c.subVectors(b.group.position, a.group.position);
-        const dist = _c.length();
-        if (dist === 0 || dist >= minDist) continue;
-
-        _c.multiplyScalar(1 / dist);
-        const overlap = minDist - dist;
-        a.group.position.addScaledVector(_c, -overlap * 0.5);
-        b.group.position.addScaledVector(_c, overlap * 0.5);
-
-        const rel = _b.subVectors(b.vel, a.vel).dot(_c);
-        if (rel > 0) continue;
-        const impulse = -(1 + 0.8) * rel * 0.5;
-        a.vel.addScaledVector(_c, -impulse);
-        b.vel.addScaledVector(_c, impulse);
-      }
-    }
-  }
-
-  checkHoles() {
-    const R = CONFIG.ballRadius;
-    for (const ball of this.balls) {
-      if (ball.state !== 'live') continue;
-      if (ball.group.position.y > R + 0.09) continue;
-      const speed = Math.hypot(ball.vel.x, ball.vel.z);
-      if (speed > CONFIG.captureSpeed) continue;
-      for (const hole of this.holes) {
-        const dx = ball.group.position.x - hole.x;
-        const dz = ball.group.position.z - hole.z;
-        if (Math.hypot(dx, dz) < CONFIG.captureRadius) {
-          this.sinkBall(ball, hole);
-          break;
+        if (!this.inPlay(b)) continue;
+        const { hit, impactSpeed } = resolveBallCollision(a.body, b.body, CONFIG);
+        if (hit && impactSpeed > 1.6) {
+          _a.copy(a.body.pos).lerp(b.body.pos, 0.5);
+          this.spawnDust(_a, 0.7, 0.3);
         }
       }
     }
   }
 
-  sinkBall(ball, hole) {
-    ball.state = 'sinking';
-    ball.sink.from.copy(ball.group.position);
-    ball.sink.to.set(hole.x, -0.6, hole.z);
-    ball.sink.t = 0;
-    ball.vel.set(0, 0, 0);
-    this.spawnDust(ball.group.position, 0.9, 0.5);
-
-    const team = TEAMS[ball.teamIndex];
-    this.ui.toast(`Goolah in the hole! · ${team.name}`, team.css);
-    this.ui.pulseScoreButton(ball.teamIndex);
+  /** A goolah has stopped: record it in a mat if it settled in one. */
+  settleBall(ball) {
+    const mat = this.matUnder(ball.body.pos);
+    if (mat) {
+      ball.state = 'mat';
+      ball.matIndex = mat.index;
+      ball.body.pos.y = CONFIG.ballRadius - CONFIG.matDepth + 0.001;
+      ball.group.position.copy(ball.body.pos);
+      const team = TEAMS[ball.teamIndex];
+      const owner = TEAMS[mat.teamIndex];
+      this.ui.toast(
+        `Goolah ${ball.playerIndex + 1} (${team.name}) rests in mat ${mat.index + 1} · ${owner.name}'s mat`,
+        team.css
+      );
+      // Scoring stays manual, so only point the scorekeeper at the right team.
+      this.ui.pulseScoreButton(mat.teamIndex);
+      return;
+    }
+    ball.state = 'settled';
   }
 
-  updateSinking(dt) {
+  matUnder(position) {
+    for (const mat of this.mats) {
+      const dx = position.x - mat.position.x;
+      const dz = position.z - mat.position.z;
+      if (Math.hypot(dx, dz) <= CONFIG.matRadius * 0.75) return mat;
+    }
+    return null;
+  }
+
+  syncVisuals(dt) {
+    const R = CONFIG.ballRadius;
     for (const ball of this.balls) {
-      if (ball.state !== 'sinking') continue;
-      ball.sink.t += dt / 0.45;
-      const t = clamp(ball.sink.t, 0, 1);
-      ball.group.position.lerpVectors(ball.sink.from, ball.sink.to, easeOut(t));
-      if (t >= 1) {
-        ball.state = 'hole';
-        ball.group.visible = false;
+      ball.group.position.copy(ball.body.pos);
+
+      const speed = Math.hypot(ball.body.vel.x, ball.body.vel.z);
+      if (speed > 0.02 && ball.body.pos.y <= R + 0.06) {
+        // Rolling spin: axis is perpendicular to travel, so the ball appears to
+        // roll rather than slide.
+        _b.set(-ball.body.vel.z, 0, ball.body.vel.x).normalize();
+        _q.setFromAxisAngle(_b, (speed * dt) / R);
+        ball.mesh.quaternion.premultiply(_q);
       }
     }
   }
 
   allSettled() {
-    const R = CONFIG.ballRadius;
-    return this.balls.every((ball) => {
-      if (ball.state === 'held' || ball.state === 'hole' || ball.state === 'sinking') return true;
-      const speed = Math.hypot(ball.vel.x, ball.vel.z);
-      return speed < 0.18 && Math.abs(ball.vel.y) < 0.4 && ball.group.position.y <= R + 0.02;
-    });
+    return this.balls.every((ball) => ball.state !== 'live');
   }
 
   /* --------------------------------------------------------------- input --- */
-
-  cameraBasis() {
-    this.camera.getWorldDirection(_c);
-    _c.y = 0;
-    if (_c.lengthSq() < 1e-6) _c.set(0, 0, -1);
-    _c.normalize();
-    return _c;
-  }
 
   _onDown(event) {
     if (!this.canAim()) return;
@@ -456,10 +473,13 @@ export class Game {
     };
     this.phase = 'aiming';
     this.aim.power = 0;
+    this.aim.angle = 0;
+    this.aim.dir.copy(FORWARD);
     this.ui.setPower(0);
     this.ui.setTurnHint('Drag to aim, release to throw');
     this.aimGroup.visible = true;
     this.dots.visible = true;
+    this.updateAimVisuals();
     try {
       this.renderer.domElement.setPointerCapture(event.pointerId);
     } catch (err) {
@@ -473,33 +493,35 @@ export class Game {
     const dx = event.clientX - this.pointer.startX;
     const dy = event.clientY - this.pointer.startY;
     const mag = Math.hypot(dx, dy);
-    if (mag < 6) return;
+    if (mag < CONFIG.minDragPx) return;
     this.pointer.moved = true;
 
-    const forward = this.cameraBasis().clone();
-    const right = new THREE.Vector3().crossVectors(forward, UP).normalize();
+    // Screen space -> field space. A drag up the screen throws down the line of
+    // mats; a sideways drag aims left or right.
+    const axis = FORWARD;
+    const side = _b.crossVectors(axis, UP).normalize();
 
-    _b.set(0, 0, 0).addScaledVector(right, dx).addScaledVector(forward, -dy);
-    if (_b.lengthSq() < 1e-6) return;
-    _b.normalize();
+    const along = -dy;
+    if (along <= 0.05) return; // ignore backwards drags
 
-    const axis = this.fieldAxis().clone();
-    const side = new THREE.Vector3().crossVectors(axis, UP).normalize();
-    if (_b.dot(axis) <= 0.05) return; // ignore backwards swipes
-
-    const rawAngle = Math.atan2(_b.dot(side), _b.dot(axis));
+    const rawAngle = Math.atan2(dx, along);
     const angle = clamp(rawAngle, -CONFIG.maxAimAngle, CONFIG.maxAimAngle);
     this.aim.angle = angle;
-    this.aim.dir.copy(axis).multiplyScalar(Math.cos(angle)).addScaledVector(side, Math.sin(angle)).normalize();
+    this.aim.dir.copy(axis).multiplyScalar(Math.cos(angle)).addScaledVector(side, Math.sin(angle));
+    this.aim.dir.y = 0;
+    this.aim.dir.normalize();
 
+    // Drag distance is the power.
     const screen = Math.min(window.innerWidth, window.innerHeight);
-    this.aim.power = clamp(mag / (screen * 0.34), 0.06, 1);
+    this.aim.power = clamp(mag / (screen * CONFIG.powerDragFraction), 0.06, 1);
     this.ui.setPower(this.aim.power);
     this.updateAimVisuals();
   }
 
   _onUp(event) {
-    if (!this.pointer || (event.pointerId !== undefined && event.pointerId !== this.pointer.id)) return;
+    if (!this.pointer || (event.pointerId !== undefined && event.pointerId !== this.pointer.id)) {
+      return;
+    }
     const power = this.aim.power;
     const moved = this.pointer.moved;
     this.pointer = null;
@@ -511,9 +533,10 @@ export class Game {
         this.phase = 'ready';
         this.aim.power = 0;
         this.ui.setPower(0);
-        this.ui.setTurnHint('Swipe up to throw');
+        this.ui.setTurnHint('Drag to aim · release to throw');
         this.aimGroup.visible = false;
         this.dots.visible = false;
+        this.restRing.visible = false;
       }
     }
     try {
@@ -534,37 +557,43 @@ export class Game {
 
   updateAimVisuals() {
     const ball = this.activeBall;
-    const pos = ball.group.position;
+    const pos = ball.body.pos;
+
     this.aimGroup.position.set(pos.x, 0.055, pos.z);
     this.aimGroup.rotation.y = Math.atan2(this.aim.dir.x, this.aim.dir.z);
-    const length = 1.3 + this.aim.power * 4.4;
+    const length = 1.2 + this.aim.power * 3.6;
     this.aimShaft.scale.z = length;
     this.aimTip.position.z = length;
 
     this.aimRing.position.set(pos.x, 0.025, pos.z);
 
-    // Flight preview.
-    const speed = CONFIG.minSpeed + this.aim.power * (CONFIG.maxSpeed - CONFIG.minSpeed);
-    const lift = CONFIG.minLift + this.aim.power * (CONFIG.maxLift - CONFIG.minLift);
-    const p = pos.clone();
-    const v = new THREE.Vector3(this.aim.dir.x * speed, lift, this.aim.dir.z * speed);
-    const step = 0.055;
-    const R = CONFIG.ballRadius;
-    for (let i = 0; i < 26; i++) {
-      v.y -= CONFIG.gravity * step;
-      p.addScaledVector(v, step);
-      if (p.y < R) {
-        p.y = R;
-        if (v.y < 0) v.y = -v.y * CONFIG.restitution;
-        v.x *= 0.86;
-        v.z *= 0.86;
+    // Preview the shot with the same integrator the game runs, so the dotted
+    // path and the resting ring show where this throw will actually stop.
+    const shot = simulateShot(pos, this.aim.dir, this.aim.power, CONFIG, {
+      step: 1 / 90,
+      sampleEvery: 0.055,
+      maxSamples: this.dots.count,
+      surface: this.surfaceHeightAt,
+    });
+
+    for (let i = 0; i < this.dots.count; i++) {
+      const sample = shot.samples[i];
+      if (!sample) {
+        _m.makeScale(0, 0, 0);
+        _m.setPosition(0, -10, 0);
+        this.dots.setMatrixAt(i, _m);
+        continue;
       }
-      const s = 1 - i / 34;
+      const s = 1 - i / (this.dots.count + 8);
       _m.makeScale(s, s, s);
-      _m.setPosition(p.x, p.y, p.z);
+      _m.setPosition(sample.x, Math.max(sample.y, 0.07), sample.z);
       this.dots.setMatrixAt(i, _m);
     }
     this.dots.instanceMatrix.needsUpdate = true;
+
+    this.restRing.position.set(shot.rest.x, 0.02, shot.rest.z);
+    this.restRing.visible = true;
+    this.lastPreview = shot;
   }
 
   /* -------------------------------------------------------------- visuals --- */
@@ -573,20 +602,27 @@ export class Game {
     if (!this.marker.visible) return;
     const ball = this.activeBall;
     const bob = Math.sin(this.time * 3.4) * 0.09;
-    this.marker.position.set(ball.group.position.x, ball.group.position.y + bob, ball.group.position.z);
+    this.marker.position.set(
+      ball.body.pos.x,
+      ball.body.pos.y + bob,
+      ball.body.pos.z
+    );
     this.marker.rotation.y = this.time * 0.9;
   }
 
   updateCamera(dt, snap = false) {
-    const sign = this.activeTeamIndex === 0 ? 1 : -1;
     const portrait = (this.camera.aspect || 1) < 1;
+    const busy = this.phase === 'flying' || this.phase === 'aiming';
 
-    const goalPos = _a.set(0, portrait ? 10.4 : 8.8, (portrait ? 19.6 : 17.2) * sign);
-    const goalLook = _b.set(0, 0.2, 1.6 * sign);
+    // The camera always sits behind the shared throw line looking down the
+    // line of mats, because both teams throw from that same line.
+    const goalPos = _a.set(0, portrait ? 9.4 : 7.2, portrait ? -14.6 : -13.2);
+    const goalLook = _b.set(0, 0.35, 1.1);
 
-    if (this.phase === 'flying' || this.phase === 'aiming') {
-      goalLook.lerp(this.activeBall.group.position, 0.4);
-      goalLook.y = Math.max(goalLook.y, 0.25);
+    if (busy) {
+      const ball = this.activeBall.body.pos;
+      goalLook.lerp(ball, 0.35);
+      goalLook.y = Math.max(goalLook.y, 0.3);
     }
 
     const k = snap ? 1 : 1 - Math.exp(-4.5 * Math.max(dt, 0.001));
@@ -657,7 +693,7 @@ export class Game {
     this.phase = 'ready';
     this.inputEnabled = true;
     this.startRound();
-    this.ui.showHint('Swipe up to throw your goolah');
+    this.ui.showHint(`${TEAMS[this.activeTeamIndex].name} throws first — drag to aim`);
   }
 
   addScore(teamIndex, delta) {
@@ -668,10 +704,7 @@ export class Game {
     if (this.scores[teamIndex] >= CONFIG.targetScore) {
       this.phase = 'gameover';
       this.inputEnabled = false;
-      this.aimGroup.visible = false;
-      this.dots.visible = false;
-      this.marker.visible = false;
-      this.aimRing.visible = false;
+      this.hideAimHelpers();
       this.ui.showWin(TEAMS[teamIndex]);
     }
   }
@@ -684,5 +717,35 @@ export class Game {
     this.inputEnabled = true;
     this.phase = 'ready';
     this.startRound();
+  }
+
+  /** Snapshot used by the automated checks. */
+  state() {
+    return {
+      phase: this.phase,
+      round: this.round,
+      turnSeq: this.turnSeq,
+      turn: { teamIndex: this.active.teamIndex, playerIndex: this.active.playerIndex },
+      roundStartTeam: this.roundStartTeam,
+      scores: [...this.scores],
+      throwLineZ: CONFIG.throwLineZ,
+      matDepth: CONFIG.matDepth,
+      matRadius: CONFIG.matRadius,
+      mats: this.mats.map((m) => ({
+        index: m.index,
+        teamIndex: m.teamIndex,
+        x: m.position.x,
+        z: m.position.z,
+      })),
+      balls: this.balls.map((b) => ({
+        teamIndex: b.teamIndex,
+        playerIndex: b.playerIndex,
+        state: b.state,
+        matIndex: b.matIndex,
+        x: Number(b.body.pos.x.toFixed(3)),
+        y: Number(b.body.pos.y.toFixed(3)),
+        z: Number(b.body.pos.z.toFixed(3)),
+      })),
+    };
   }
 }
