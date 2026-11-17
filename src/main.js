@@ -38,6 +38,9 @@ const LOW_END = gpu.low;
 // Software rasterizers pay per pixel, so they render at half resolution.
 const MAX_PIXEL_RATIO = LOW_END ? 0.5 : 2;
 const FRAME_INTERVAL = LOW_END ? 1000 / 30 : 0;
+// Between throws nothing moves, so draw only a few frames per second instead of
+// a full loop. That keeps the main thread free on phones and low-power GPUs.
+const IDLE_INTERVAL = LOW_END ? 500 : 150;
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -51,7 +54,7 @@ const camera = new THREE.PerspectiveCamera(56, 1, 0.1, 400);
 
 const ui = new UI();
 mark(`renderer gpu=${gpu.name || 'unknown'} low=${LOW_END}`);
-const world = buildWorld(scene, renderer, { lowEnd: LOW_END });
+const world = buildWorld(scene, renderer);
 mark(`world ${JSON.stringify(world.timings)}`);
 const game = new Game({ scene, camera, renderer, world, ui });
 try {
@@ -125,13 +128,36 @@ function queueDecor() {
   setTimeout(runNext, 140);
 }
 
-renderer.setAnimationLoop((time) => {
-  // On weak GPUs skip excess frames so input, checks and layout still get time.
-  if (FRAME_INTERVAL && time - lastFrameTime < FRAME_INTERVAL) return;
-  lastFrameTime = time;
+let activeUntil = 0;
 
+function holdAwake(ms = 1400) {
+  activeUntil = Math.max(activeUntil, performance.now() + ms);
+}
+
+const onInput = () => holdAwake();
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'touchstart', 'touchmove', 'keydown']) {
+  window.addEventListener(type, onInput, { passive: true });
+}
+// A throw keeps rolling for a while after the finger lifts.
+window.addEventListener('pointerup', () => holdAwake(3000), { passive: true });
+
+// Continuous frames are only needed while something is actually happening.
+function isBusy() {
+  if (firstFrame) return true;
+  if (performance.now() < activeUntil) return true;
+  if (typeof game.turnLock === 'number' && game.turnLock > 0) return true;
+  return Boolean(game.phase && game.phase !== 'ready');
+}
+
+renderer.setAnimationLoop((time) => {
+  // The simulation always advances; only the draw call is rate limited.
   const dt = Math.min(clock.getDelta(), 0.05);
   game.update(dt);
+
+  const interval = isBusy() ? FRAME_INTERVAL : IDLE_INTERVAL;
+  if (interval && time - lastFrameTime < interval) return;
+  lastFrameTime = time;
+
   renderer.render(scene, camera);
 
   if (firstFrame) {
@@ -139,6 +165,8 @@ renderer.setAnimationLoop((time) => {
     ui.hideLoader();
     mark('first-frame');
     queueDecor();
+    // Keep full-rate frames while the scenery steps are still being built.
+    holdAwake(LOW_END ? 4000 : 2200);
   }
 });
 
