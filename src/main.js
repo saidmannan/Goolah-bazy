@@ -34,6 +34,11 @@ try {
   ui.toast('Could not prepare the field — please reload');
 }
 
+// Opt-in handle for automated checks and manual debugging.
+if (new URLSearchParams(window.location.search).has('debug')) {
+  window.__gb = { game, ui, world, renderer, scene, camera };
+}
+
 function resize() {
   const width = window.innerWidth;
   const height = window.innerHeight;
