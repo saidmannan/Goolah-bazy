@@ -414,10 +414,6 @@ export class Game {
     return height;
   };
 
-  inPlay(ball) {
-    return ball.state === 'live' || ball.state === 'settled' || ball.state === 'mat';
-  }
-
   update(dt) {
     this.time += dt;
     if (this.turnLock > 0) this.turnLock -= dt;
