@@ -37,6 +37,11 @@ export const CONFIG = {
   // Each goolah waits beside the mat its team owns.
   homeOffsetX: 0.78,
 
+  // Rule 2: defending players wait behind mat 1 and behind mat 3, and throw
+  // from there when their turn comes. The offset keeps a goolah clear of the
+  // dish and out of the throwing lane.
+  defenderOffsetZ: 0.95,
+
   /* --------------------------------------------------------- the goolahs --- */
   ballRadius: 0.28,
 
@@ -107,4 +112,26 @@ export function homePosition(teamIndex, playerIndex) {
 /** Throwing spot on the shared line. Both players of a team use this same line. */
 export function throwPosition(playerIndex) {
   return new THREE.Vector3(CONFIG.throwX[playerIndex], CONFIG.ballRadius, CONFIG.throwLineZ);
+}
+
+/**
+ * Starting spot of a defending goolah: player 1 behind mat 1, player 2 behind
+ * mat 3, both slightly to the side so they never sit in the dish.
+ */
+export function defenderPosition(playerIndex) {
+  const matIndex = playerIndex === 0 ? 0 : 2;
+  const side = playerIndex === 0 ? -1 : 1;
+  return new THREE.Vector3(
+    CONFIG.matX + side * CONFIG.homeOffsetX,
+    CONFIG.ballRadius,
+    CONFIG.matZ[matIndex] - CONFIG.defenderOffsetZ
+  );
+}
+
+/**
+ * Where a goolah waits at the start of a round, by role. The throwing team
+ * stands on the shared line; the defending team waits behind mats 1 and 3.
+ */
+export function startPosition(role, playerIndex) {
+  return role === 'throw' ? throwPosition(playerIndex) : defenderPosition(playerIndex);
 }
