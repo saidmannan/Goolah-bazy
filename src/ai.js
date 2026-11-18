@@ -27,8 +27,8 @@ export const DIFFICULTIES = {
   beginner: {
     id: 'beginner',
     label: 'Beginner',
-    aimSigma: 0.14, // radians of aim error
-    powerSigma: 0.18, // power error, 0..1 scale
+    aimSigma: 0.13, // radians of aim error
+    powerSigma: 0.10, // power error, 0..1 scale
     picks: 3, // chooses among its three best ideas
     rollout: false, // no look-ahead: aims at what looks good
     refine: 0,
@@ -36,20 +36,20 @@ export const DIFFICULTIES = {
   intermediate: {
     id: 'intermediate',
     label: 'Intermediate',
-    aimSigma: 0.055,
-    powerSigma: 0.075,
+    aimSigma: 0.05,
+    powerSigma: 0.035,
     picks: 2,
     rollout: true,
-    refine: 3,
+    refine: 4,
   },
   professional: {
     id: 'professional',
     label: 'Professional',
-    aimSigma: 0.01,
-    powerSigma: 0.015,
+    aimSigma: 0.009,
+    powerSigma: 0.007,
     picks: 1,
     rollout: true,
-    refine: 5,
+    refine: 6,
   },
 };
 
@@ -145,8 +145,8 @@ export function rangeTable(cfg = CONFIG) {
 
   const surface = matSurface(cfg);
   const rows = [];
-  for (let i = 0; i <= 20; i += 1) {
-    const power = i / 20;
+  for (let i = 0; i <= 40; i += 1) {
+    const power = i / 40;
     const shot = simulateShot(
       { x: 0, y: cfg.ballRadius, z: cfg.throwLineZ },
       { x: 0, y: 0, z: 1 },
@@ -176,6 +176,38 @@ export function powerForDistance(distance, cfg = CONFIG) {
     }
   }
   return last.power;
+}
+
+/** Distance a throw carries at this power, interpolated from the range table. */
+export function distanceForPower(power, cfg = CONFIG) {
+  const rows = rangeTable(cfg);
+  const first = rows[0];
+  const last = rows[rows.length - 1];
+  if (power <= first.power) return first.distance;
+  if (power >= last.power) return last.distance;
+  for (let i = 1; i < rows.length; i += 1) {
+    const a = rows[i - 1];
+    const b = rows[i];
+    if (power <= b.power) {
+      const span = Math.max(1e-6, b.power - a.power);
+      return a.distance + ((power - a.power) / span) * (b.distance - a.distance);
+    }
+  }
+  return last.distance;
+}
+
+/**
+ * Metres of roll gained per unit of power near this power. A mat needs the ball
+ * to stop inside a 0.63 m dish, so this slope is what decides whether a given
+ * player can realistically sink one: the higher the slope, the tighter the
+ * power window and the more an imprecise player should avoid mat attempts.
+ */
+export function distanceSlope(power, cfg = CONFIG) {
+  const eps = 0.05;
+  const lo = Math.max(0, power - eps);
+  const hi = Math.min(1, power + eps);
+  const span = Math.max(1e-6, hi - lo);
+  return Math.max(0.5, (distanceForPower(hi, cfg) - distanceForPower(lo, cfg)) / span);
 }
 
 function matAt(x, z, cfg) {
@@ -270,29 +302,78 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     };
   }
 
-  /** Nudge the power so a mat attempt actually settles in the hollow. */
+  /**
+   * Nudge the power so a mat attempt actually settles in the hollow.
+   *
+   * The stopping distance is monotonic in power, so a short bisection on the
+   * signed landing error lands on the dish instead of on a coarse +/-0.02 grid,
+   * which is far too wide when the dish is only 0.63 m across. The base aim is
+   * kept if the bisection does not improve on it.
+   */
   function refineMatPower(shooter, candidate, aim, cfg) {
     const steps = profile.refine;
     if (!steps) return aim;
-    let best = { ...aim };
-    let bestGap = Infinity;
-    for (let i = 0; i < steps; i += 1) {
-      const delta = i === 0 ? 0 : (i % 2 === 1 ? 1 : -1) * 0.02 * Math.ceil(i / 2);
-      const power = clamp(aim.power + delta, 0.08, 1);
+    const dir = { x: Math.sin(aim.angle), y: 0, z: Math.cos(aim.angle) };
+    const target = Math.hypot(candidate.x - shooter.x, candidate.z - shooter.z);
+    const landingError = (power) => {
       const shot = simulateShot(
         { x: shooter.x, y: cfg.ballRadius, z: shooter.z },
-        { x: Math.sin(aim.angle), y: 0, z: Math.cos(aim.angle) },
+        dir,
         power,
         cfg,
         { step: 1 / 60, maxTime: 14, surface }
       );
-      const gap = Math.hypot(shot.rest.x - candidate.x, shot.rest.z - candidate.z);
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = { ...aim, power };
+      return Math.hypot(shot.rest.x - shooter.x, shot.rest.z - shooter.z) - target;
+    };
+
+    let bestPower = aim.power;
+    let bestError = Math.abs(landingError(aim.power));
+    let lo = 0.06;
+    let hi = 1;
+    for (let i = 0; i < steps; i += 1) {
+      const mid = (lo + hi) / 2;
+      const error = landingError(mid);
+      if (Math.abs(error) < bestError) {
+        bestError = Math.abs(error);
+        bestPower = mid;
       }
+      if (error > 0) hi = mid;
+      else lo = mid;
     }
-    return best;
+    return { ...aim, power: bestPower };
+  }
+
+  /** P(|error| <= tol) for a normal error of the given sigma. */
+  function withinTolerance(tol, sigma) {
+    if (!(sigma > 1e-6)) return 1;
+    const z = Math.max(0, tol) / (sigma * Math.SQRT2);
+    const t = 1 / (1 + 0.3275911 * z);
+    const erf =
+      1 -
+      (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
+        + 0.254829592) *
+        t *
+        Math.exp(-z * z);
+    return clamp(erf, 0, 1);
+  }
+
+  /**
+   * How likely this player is to actually execute the planned shot.
+   *
+   * A Tir only has to be passed through, so power precision barely matters; a
+   * Mat has to stop inside the dish, where the same power error costs far more
+   * metres than the dish is wide. This is why a weak player should not keep
+   * attempting mats, and why the three levels end up playing differently.
+   */
+  function reliability(candidate, aim, shooter, cfg) {
+    const distance = Math.hypot(candidate.x - shooter.x, candidate.z - shooter.z);
+    const angleTol = candidate.type === 'mat' ? cfg.matRadius * 0.75 : cfg.ballRadius;
+    const lateralSigma = Math.tan(profile.aimSigma) * Math.max(0.6, distance);
+    const slope = distanceSlope(aim.power, cfg);
+    const powerTol = candidate.type === 'mat'
+      ? cfg.matRadius * 0.75
+      : Math.max(1.2, distance * 0.35);
+    return withinTolerance(angleTol, lateralSigma) * withinTolerance(powerTol, slope * profile.powerSigma);
   }
 
   /* -------------------------------------------------------- candidates -- */
@@ -352,9 +433,10 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
 
   /* ------------------------------------------------------------- value -- */
 
-  function valueOf(candidate, aim, prediction, engine) {
+  function valueOf(candidate, aim, prediction, engine, shooter, cfg) {
     const state = engine.state;
     const team = state.turn.teamIndex;
+    const openMats = state.mats.filter((mat) => !mat.completed).length;
     let value = 0;
 
     if (candidate.type === 'tir') {
@@ -362,9 +444,11 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       value += candidate.matPer ? 5.5 : 2.4;
     } else {
       // First two mats of the round score nothing, further ones score a point,
-      // and every capture earns another chance (rule 4).
+      // and every capture earns another chance (rule 4). Closing the last mats
+      // also ends the round, so they are worth chasing as they thin out.
       value += state.captured[team] >= 2 ? 3.0 : 1.5;
       value += 1.2;
+      value += (4 - openMats) * 0.35;
     }
 
     if (!aim.reachable) value -= 4;
@@ -383,11 +467,16 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       } else {
         value -= 1.5;
       }
+      // A mat attempt that touches another goolah is deflected off the dish.
+      if (candidate.type === 'mat' && prediction.contacts.length > 0) value -= 2.0;
       if (prediction.teammateHit) value -= 1.5; // rule 7: no point, no chance
       if (prediction.offField) value -= 2.5; // would need Rakh
       if (prediction.selfMat >= 0 && candidate.type === 'tir') value += 1.5;
     }
 
+    // Expected value: a plan this player cannot execute is worth much less.
+    const floor = candidate.type === 'mat' ? 0.12 : 0.05;
+    value *= Math.max(floor, reliability(candidate, aim, shooter, cfg));
     return value;
   }
 
@@ -457,7 +546,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         candidate,
         aim,
         prediction,
-        value: valueOf(candidate, aim, prediction, engine),
+        value: valueOf(candidate, aim, prediction, engine, shooter, cfg),
       };
     });
     scored.sort((a, b) => b.value - a.value);
