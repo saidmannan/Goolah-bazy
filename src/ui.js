@@ -1,5 +1,15 @@
 import { RULES, matPointsFor } from './rules.js';
 import { TEAMS } from './config.js';
+import {
+  DEFAULT_DIFFICULTY,
+  DEFAULT_SEATS,
+  DIFFICULTIES,
+  DIFFICULTY_ORDER,
+  normalizeSeats,
+  seatKey,
+} from './ai.js';
+
+const SETUP_KEY = 'goolah.setup.v1';
 
 export class UI {
   constructor() {
@@ -38,6 +48,10 @@ export class UI {
     };
 
     this.toastTimer = null;
+
+    // Line-up and AI difficulty live in the setup panel and survive a reload.
+    this.setup = this.loadSetup();
+    this.bindSetup();
   }
 
   get overlayOpen() {
@@ -142,6 +156,128 @@ export class UI {
 
   hideStart() {
     this.el.startOverlay.classList.add('hidden');
+  }
+
+  showStart() {
+    this.el.startOverlay.classList.remove('hidden');
+    this.renderSetup();
+  }
+
+  /* ----------------------------------------------------------- line-up --- */
+
+  loadSetup() {
+    const fallback = { seats: { ...DEFAULT_SEATS }, difficulty: DEFAULT_DIFFICULTY };
+    try {
+      const raw = localStorage.getItem(SETUP_KEY);
+      if (!raw) return fallback;
+      const saved = JSON.parse(raw) || {};
+      return {
+        seats: normalizeSeats(saved.seats),
+        difficulty: DIFFICULTY_ORDER.includes(saved.difficulty)
+          ? saved.difficulty
+          : DEFAULT_DIFFICULTY,
+      };
+    } catch (err) {
+      return fallback;
+    }
+  }
+
+  saveSetup() {
+    try {
+      localStorage.setItem(SETUP_KEY, JSON.stringify(this.setup));
+    } catch (err) {
+      // Private mode: the in-memory choice still applies to this match.
+    }
+  }
+
+  bindSetup() {
+    this.seatButtons = Array.from(document.querySelectorAll('.seat'));
+    for (const button of this.seatButtons) {
+      button.addEventListener('click', () => {
+        const key = seatKey(Number(button.dataset.team), Number(button.dataset.player));
+        this.setup.seats[key] = this.setup.seats[key] === 'ai' ? 'human' : 'ai';
+        this.saveSetup();
+        this.renderSetup();
+      });
+    }
+
+    this.diffButtons = Array.from(document.querySelectorAll('.seg-btn'));
+    for (const button of this.diffButtons) {
+      button.addEventListener('click', () => {
+        this.setup.difficulty = button.dataset.difficulty;
+        this.saveSetup();
+        this.renderSetup();
+      });
+    }
+
+    const preset = (id, seats) => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.addEventListener('click', () => {
+        this.setup.seats = { ...seats };
+        this.saveSetup();
+        this.renderSetup();
+      });
+    };
+    preset('presetSolo', { '0:0': 'ai', '0:1': 'ai', '1:0': 'human', '1:1': 'ai' });
+    preset('presetDuo', { '0:0': 'human', '0:1': 'human', '1:0': 'human', '1:1': 'human' });
+    preset('presetWatch', { '0:0': 'ai', '0:1': 'ai', '1:0': 'ai', '1:1': 'ai' });
+
+    this.renderSetup();
+  }
+
+  renderSetup() {
+    const seats = this.setup.seats;
+    const keys = ['0:0', '0:1', '1:0', '1:1'];
+    const humans = keys.filter((key) => seats[key] !== 'ai');
+    const label = (DIFFICULTIES[this.setup.difficulty] || DIFFICULTIES.intermediate).label;
+
+    for (const button of this.seatButtons || []) {
+      const key = seatKey(Number(button.dataset.team), Number(button.dataset.player));
+      const isAI = seats[key] === 'ai';
+      button.classList.toggle('is-ai', isAI);
+      button.setAttribute('aria-pressed', String(isAI));
+      const role = button.querySelector('.seat-role');
+      if (role) {
+        role.textContent = isAI
+          ? `AI · ${label}`
+          : humans.length === 1 && humans[0] === key
+            ? 'You'
+            : 'Human';
+      }
+    }
+
+    for (const button of this.diffButtons || []) {
+      const on = button.dataset.difficulty === this.setup.difficulty;
+      button.classList.toggle('on', on);
+      button.setAttribute('aria-pressed', String(on));
+    }
+
+    const hint = document.getElementById('setupHint');
+    if (hint) {
+      hint.textContent =
+        humans.length === 0
+          ? 'All four seats are AI: the match plays itself.'
+          : humans.length === 4
+            ? 'Four human seats on one device, taking turns.'
+            : `${humans.length} human · ${4 - humans.length} AI`;
+    }
+
+    this.setSeatRoles(seats);
+  }
+
+  /** Mark AI seats on the scoreboard chips so the table reads at a glance. */
+  setSeatRoles(seats) {
+    const label = (DIFFICULTIES[this.setup.difficulty] || DIFFICULTIES.intermediate).label;
+    for (const teamIndex of [0, 1]) {
+      const chips = teamIndex === 0 ? this.el.chipsA : this.el.chipsB;
+      chips.querySelectorAll('.chip').forEach((chip, playerIndex) => {
+        const isAI = seats[seatKey(teamIndex, playerIndex)] === 'ai';
+        chip.textContent = isAI ? `P${playerIndex + 1} AI` : `P${playerIndex + 1}`;
+        chip.classList.toggle('ai', isAI);
+        chip.title = isAI ? `AI · ${label}` : 'Human player';
+      });
+    }
   }
 
   openRules() {

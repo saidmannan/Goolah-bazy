@@ -78,6 +78,7 @@
           </div>
           <div class="bottom-buttons">
             <button class="pill" id="rulesBtn" type="button">How to play</button>
+            <button class="pill ghost" id="setupBtn" type="button">Line-up</button>
             <button class="pill ghost" id="resetBtn" type="button">Reset</button>
           </div>
         </div>
@@ -90,6 +91,35 @@
           <p class="eyebrow">Traditional Afghan Team Game</p>
           <h1 class="title">Goolah<br /><span>Bazy</span></h1>
           <p class="lede">Four mats in a line. Four heavy goolahs. Two teams of two.</p>
+
+          <div class="setup">
+            <div class="setup-head"><span>Line-up</span><span class="setup-note">Seat changes restart the match</span></div>
+            <div class="seat-list" id="seatList">
+              <button class="seat" type="button" data-team="1" data-player="0">
+                <span class="seat-dot zan"></span><span class="seat-name">Zananda P1</span><span class="seat-role">Human</span>
+              </button>
+              <button class="seat" type="button" data-team="1" data-player="1">
+                <span class="seat-dot zan"></span><span class="seat-name">Zananda P2</span><span class="seat-role">AI</span>
+              </button>
+              <button class="seat" type="button" data-team="0" data-player="0">
+                <span class="seat-dot sha"></span><span class="seat-name">Shānanda P1</span><span class="seat-role">AI</span>
+              </button>
+              <button class="seat" type="button" data-team="0" data-player="1">
+                <span class="seat-dot sha"></span><span class="seat-name">Shānanda P2</span><span class="seat-role">AI</span>
+              </button>
+            </div>
+            <div class="setup-head"><span>AI difficulty</span><span class="setup-note" id="setupHint">1 human · 3 AI</span></div>
+            <div class="seg" id="diffGroup" role="group" aria-label="AI difficulty">
+              <button class="seg-btn" type="button" data-difficulty="beginner">Beginner</button>
+              <button class="seg-btn" type="button" data-difficulty="intermediate">Intermediate</button>
+              <button class="seg-btn" type="button" data-difficulty="professional">Professional</button>
+            </div>
+            <div class="presets">
+              <button class="pill" id="presetSolo" type="button">Solo vs AI</button>
+              <button class="pill" id="presetDuo" type="button">Two players</button>
+              <button class="pill" id="presetWatch" type="button">Watch AI</button>
+            </div>
+          </div>
           <ul class="facts">
             <li><b>4</b> mats in a straight line</li>
             <li><b>2</b> teams of two players</li>
