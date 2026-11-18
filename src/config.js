@@ -83,7 +83,7 @@ export const CONFIG = {
 
 export const TEAMS = [
   { id: 'blue', name: 'Shānanda', color: 0x3d8bff, css: '#3d8bff', cssClass: 'blue' },
-  { id: 'orange', name: 'Orange', color: 0xff8a3d, css: '#ff8a3d', cssClass: 'orange' },
+  { id: 'orange', name: 'Zananda', color: 0xff8a3d, css: '#ff8a3d', cssClass: 'orange' },
 ];
 
 export const MAT_COUNT = CONFIG.matZ.length;
