@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, TEAMS, homePosition, throwPosition } from './config.js';
+import { CONFIG, TEAMS, homePosition, startPosition, throwPosition } from './config.js';
 import {
   createBody,
   stepBallMotion,
@@ -7,7 +7,13 @@ import {
   simulateShot,
   throwVelocity,
 } from './physics.js';
-import { turnAt } from './turn.js';
+import {
+  RulesEngine,
+  RULES,
+  ballKey,
+  matPointsFor,
+  throwingTeamForRound,
+} from './rules.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 // Every throw travels down the line of mats, away from the shared throw line.
@@ -34,15 +40,18 @@ export class Game {
     this.effects = [];
     this.time = 0;
 
-    this.scores = [0, 0];
-    this.phase = 'intro'; // intro | ready | aiming | flying | roundEnd | gameover
+    // The agreed traditional rules live in src/rules.js. The game only reports
+    // what happened on the field and shows what the engine decides.
+    this.rules = new RulesEngine({ round: 1 });
+    this.phase = 'intro'; // intro | ready | aiming | flying | matper | roundEnd | gameover
     this.round = 1;
-    this.roundStartTeam = 0;
-    this.turnSeq = 0;
-    this.active = { teamIndex: 0, playerIndex: 0 };
+    this.active = { teamIndex: this.rules.state.throwingTeam, playerIndex: 0 };
     this.settleTimer = 0;
     this.turnLock = 0;
     this.inputEnabled = false;
+    // Collisions recorded for the throw currently in flight.
+    this.thrownBall = null;
+    this.throwHits = null;
 
     this.aim = { dir: new THREE.Vector3(0, 0, 1), power: 0, angle: 0 };
     this.pointer = null;
@@ -69,11 +78,12 @@ export class Game {
     canvas.addEventListener('pointercancel', this._onUp);
     canvas.addEventListener('pointerleave', this._onUp);
 
-    // Before the first throw, the goolahs wait beside the mats they belong to.
-    this.balls.forEach((ball) => this.placeAtHome(ball));
+    // Round 1: the throwing team stands on the shared line, the defending team
+    // waits behind mats 1 and 3 (rule 2).
+    this.placeStartingPositions();
 
     this.updateCamera(0, true);
-    this.ui.setScores(this.scores, CONFIG.targetScore);
+    this.renderState();
   }
 
   buildBalls() {
@@ -251,62 +261,106 @@ export class Game {
   }
 
   startRound() {
-    // The team that throws first alternates every round.
-    this.roundStartTeam = (this.round - 1) % 2;
-    this.turnSeq = 0;
-    this.balls.forEach((ball) => this.placeAtHome(ball));
+    this.rules.startRound(this.round);
+    this.round = this.rules.state.round;
     this.effects.forEach((fx) => {
       fx.mesh.visible = false;
       fx.active = false;
     });
-    this.startTurn();
+    this.placeStartingPositions();
+    this.beginTurn();
   }
 
-  startTurn() {
-    const turn = turnAt(this.turnSeq, this.roundStartTeam, CONFIG.playerCount);
+  /** Rule 1/2: at the start of a round all four goolahs return to their spots. */
+  placeStartingPositions() {
+    const s = this.rules.state;
+    for (const ball of this.balls) {
+      const role = ball.teamIndex === s.throwingTeam ? 'throw' : 'defend';
+      const pos = startPosition(role, ball.playerIndex);
+      ball.state = role === 'throw' ? 'staged' : 'home';
+      ball.matIndex = -1;
+      ball.body.vel.set(0, 0, 0);
+      ball.body.resting = true;
+      ball.body.pos.copy(pos);
+      ball.group.position.copy(pos);
+      ball.group.visible = true;
+    }
+  }
+
+  /**
+   * Present the turn the engine decided on. The goolah is not moved: a fresh
+   * turn starts from the round's starting spot, and an extra chance is thrown
+   * from wherever the goolah stopped (rule 5).
+   */
+  beginTurn() {
+    const turn = this.rules.state.turn;
     this.active = { teamIndex: turn.teamIndex, playerIndex: turn.playerIndex };
     const team = TEAMS[turn.teamIndex];
 
-    // Both players of the throwing team throw from the same starting line, so
-    // when their block begins both of that team's goolahs are staged on it.
-    if (turn.throwInBlock === 0) {
-      for (let p = 0; p < CONFIG.playerCount; p++) {
-        const mate = this.ballFor(turn.teamIndex, p);
-        if (mate.state === 'home') this.stageOnLine(mate);
-      }
-    }
-
-    const ball = this.activeBall;
-    if (ball.state !== 'staged') this.stageOnLine(ball);
-
     this.phase = 'ready';
-    this.turnLock = 0.5;
+    this.turnLock = 0.45;
     this.aim.power = 0;
     this.aim.angle = 0;
     this.aim.dir.copy(FORWARD);
     this.ui.setPower(0);
-    this.ui.setTurn(turn.teamIndex, turn.playerIndex);
-    this.ui.setScores(this.scores, CONFIG.targetScore);
     this.colorAimHelpers(team.color);
     this.aimRing.visible = true;
     this.marker.visible = true;
     this.markerCone.material.emissive.setHex(team.color);
+    this.renderState();
+    this.ui.setTurnHint(this.turnHintFor());
+
+    // Rule 5: a held Mat-per goolah waits for its player's next turn.
+    if (turn.pendingMatPer) this.offerMatPer(turn.pendingMatPer);
   }
 
-  endTurn() {
-    this.turnSeq += 1;
-    if (this.turnSeq >= CONFIG.throwsPerRound) {
-      this.phase = 'roundEnd';
-      this.hideAimHelpers();
-      this.ui.showRoundEnd(this.round);
-      return;
-    }
-    this.startTurn();
+  turnHintFor() {
+    const turn = this.rules.state.turn;
+    if (turn.finalOpportunity) return 'Final mat — one throw at one opponent';
+    const targets = this.rules.availableTargets();
+    if (!targets.length) return 'Both opponents locked — aim for an open mat';
+    if (turn.chances > 1) return `${turn.chances} chances left · drag to aim`;
+    return 'Drag to aim · release to throw';
+  }
+
+  /** Push the engine state into the HUD without changing the phase. */
+  renderState() {
+    const s = this.rules.state;
+    this.round = s.round;
+    this.ui.setScores(s.scores, RULES.targetScore);
+    this.ui.setMats(s.captured, s.mats, RULES.matCount);
+    this.ui.setMatPer(s.matPer);
+    this.ui.setTurn(s.turn.teamIndex, s.turn.playerIndex, s.turn.chances, {
+      throwingTeam: s.throwingTeam,
+      finalOpportunity: s.turn.finalOpportunity,
+      matPerHeld: Boolean(s.matPer[s.turn.teamIndex][s.turn.playerIndex]),
+    });
+  }
+
+  endRound() {
+    this.phase = 'roundEnd';
+    this.hideAimHelpers();
+    const s = this.rules.state;
+    this.ui.showRoundEnd({
+      round: s.round,
+      captured: [...s.captured],
+      matPoints: [matPointsFor(s.captured[0]), matPointsFor(s.captured[1])],
+      scores: [...s.scores],
+      nextThrowingTeam: throwingTeamForRound(s.round + 1),
+    });
+  }
+
+  endMatch() {
+    this.phase = 'gameover';
+    this.inputEnabled = false;
+    this.hideAimHelpers();
+    const s = this.rules.state;
+    this.ui.showWin(s.winner === null ? null : TEAMS[s.winner], s.scores, s.round);
   }
 
   nextRound() {
-    this.round += 1;
     this.ui.hideRoundEnd();
+    this.round = this.rules.state.round + 1;
     this.startRound();
   }
 
@@ -321,10 +375,15 @@ export class Game {
   /* -------------------------------------------------------------- throw --- */
 
   throwBall(power) {
+    if (!this.rules.canThrow()) return;
     const ball = this.activeBall;
     ball.body.vel.copy(throwVelocity(this.aim.dir, power, CONFIG));
     ball.body.resting = false;
     ball.state = 'live';
+
+    // Everything this throw touches is scored once, when it all comes to rest.
+    this.thrownBall = ball;
+    this.throwHits = new Map();
 
     this.phase = 'flying';
     this.settleTimer = 0;
@@ -371,7 +430,7 @@ export class Game {
     if (this.phase === 'flying') {
       if (this.allSettled()) {
         this.settleTimer += dt;
-        if (this.settleTimer > 0.55) this.endTurn();
+        if (this.settleTimer > 0.55) this.finishThrow();
       } else {
         this.settleTimer = 0;
       }
@@ -407,8 +466,35 @@ export class Game {
           _a.copy(a.body.pos).lerp(b.body.pos, 0.5);
           this.spawnDust(_a, 0.7, 0.3);
         }
+        if (hit) this.noteHit(a, b);
       }
     }
+  }
+
+  /**
+   * Record that the throw in flight touched a goolah. Only the first contact
+   * with each goolah counts (rule 8), and the goolah's exact position at that
+   * moment is kept so a teammate can be put back (rule 7).
+   */
+  noteHit(a, b) {
+    if (!this.throwHits || !this.thrownBall) return;
+    const thrown = this.thrownBall;
+    const tracked = (ball) => ball === thrown || this.throwHits.has(ballKey(ball.teamIndex, ball.playerIndex));
+
+    let target = null;
+    if (a === thrown) target = b;
+    else if (b === thrown) target = a;
+    else if (tracked(a)) target = b;
+    else if (tracked(b)) target = a;
+    if (!target || target === thrown) return;
+
+    const key = ballKey(target.teamIndex, target.playerIndex);
+    if (this.throwHits.has(key)) return;
+    this.throwHits.set(key, {
+      teamIndex: target.teamIndex,
+      playerIndex: target.playerIndex,
+      previous: target.body.pos.clone(),
+    });
   }
 
   /** A goolah has stopped: record it in a mat if it settled in one. */
@@ -419,17 +505,10 @@ export class Game {
       ball.matIndex = mat.index;
       ball.body.pos.y = CONFIG.ballRadius - CONFIG.matDepth + 0.001;
       ball.group.position.copy(ball.body.pos);
-      const team = TEAMS[ball.teamIndex];
-      const owner = TEAMS[mat.teamIndex];
-      this.ui.toast(
-        `Goolah ${ball.playerIndex + 1} (${team.name}) rests in mat ${mat.index + 1} · ${owner.name}'s mat`,
-        team.css
-      );
-      // Scoring stays manual, so only point the scorekeeper at the right team.
-      this.ui.pulseScoreButton(mat.teamIndex);
       return;
     }
     ball.state = 'settled';
+    ball.matIndex = -1;
   }
 
   matUnder(position) {
@@ -547,7 +626,13 @@ export class Game {
   }
 
   canAim() {
-    return this.phase === 'ready' && this.inputEnabled && this.turnLock <= 0 && !this.ui.overlayOpen;
+    return (
+      this.phase === 'ready' &&
+      this.inputEnabled &&
+      this.turnLock <= 0 &&
+      !this.ui.overlayOpen &&
+      this.rules.canThrow()
+    );
   }
 
   colorAimHelpers(color) {
@@ -675,8 +760,6 @@ export class Game {
   /* ------------------------------------------------------------------ ui --- */
 
   bindUI() {
-    this.ui.onScore = (teamIndex, delta) => this.addScore(teamIndex, delta);
-
     document.getElementById('playBtn').addEventListener('click', () => this.begin());
     document.getElementById('rulesBtn').addEventListener('click', () => this.ui.openRules());
     document.getElementById('closeRules').addEventListener('click', () => this.ui.closeRules());
@@ -686,6 +769,8 @@ export class Game {
       this.ui.hideWin();
       this.resetGame();
     });
+    document.getElementById('matPerHold').addEventListener('click', () => this.chooseMatPer(true));
+    document.getElementById('matPerThrow').addEventListener('click', () => this.chooseMatPer(false));
   }
 
   begin() {
@@ -696,38 +781,172 @@ export class Game {
     this.ui.showHint(`${TEAMS[this.activeTeamIndex].name} throws first — drag to aim`);
   }
 
-  addScore(teamIndex, delta) {
-    if (this.phase === 'intro' || this.phase === 'gameover') return;
-    this.scores[teamIndex] = clamp(this.scores[teamIndex] + delta, 0, CONFIG.targetScore);
-    this.ui.setScores(this.scores, CONFIG.targetScore);
+  /* ------------------------------------------------------------- scoring --- */
 
-    if (this.scores[teamIndex] >= CONFIG.targetScore) {
-      this.phase = 'gameover';
-      this.inputEnabled = false;
-      this.hideAimHelpers();
-      this.ui.showWin(TEAMS[teamIndex]);
+  /** Describe the settled throw for the rules engine. */
+  buildShotReport() {
+    const s = this.rules.state;
+    const thrown = this.thrownBall;
+    const collisions = [];
+
+    if (thrown && this.throwHits) {
+      for (const hit of this.throwHits.values()) {
+        const ball = this.ballFor(hit.teamIndex, hit.playerIndex);
+        const sameTeam = hit.teamIndex === thrown.teamIndex;
+        const held = s.matPer[hit.teamIndex][hit.playerIndex];
+        const inMat = ball.state === 'mat' ? ball.matIndex : -1;
+        collisions.push({
+          kind: sameTeam ? 'teammate' : 'opponent',
+          teamIndex: hit.teamIndex,
+          playerIndex: hit.playerIndex,
+          previous: hit.previous,
+          matPer: Boolean(held),
+          matIndex: held ? held.matIndex : -1,
+          // Rule 5: did the Mat-per goolah leave its hollow?
+          knockedOutOfMat: Boolean(held) && inMat !== held.matIndex,
+          // Rule 8: an opponent goolah pushed into an open mat.
+          enteredMat: !sameTeam && inMat >= 0 && (!held || inMat !== held.matIndex) ? inMat : -1,
+        });
+      }
     }
+
+    const ownMatIndex = thrown && thrown.state === 'mat' ? thrown.matIndex : -1;
+    return { collisions, ownMatIndex };
+  }
+
+  finishThrow() {
+    const result = this.rules.resolveThrow(this.buildShotReport());
+    this.applyResult(result);
+  }
+
+  applyResult(result) {
+    const s = this.rules.state;
+
+    // Rule 7: a hit teammate's goolah goes back to exactly where it was.
+    for (const restore of result.restore) {
+      const ball = this.ballFor(restore.teamIndex, restore.playerIndex);
+      if (!restore.position) continue;
+      ball.body.pos.set(restore.position.x, restore.position.y, restore.position.z);
+      ball.body.vel.set(0, 0, 0);
+      ball.body.resting = true;
+      ball.group.position.copy(ball.body.pos);
+      const mat = this.matUnder(ball.body.pos);
+      ball.state = mat ? 'mat' : 'settled';
+      ball.matIndex = mat ? mat.index : -1;
+    }
+
+    this.renderState();
+    this.announce(result);
+
+    // Rule 5: offer Mat-per unless the round is already being closed out by
+    // the final-mat opportunity (rule 6).
+    const wantsMatPer = result.matPerOffers.length > 0 && !result.finalMat;
+    if (wantsMatPer) {
+      this.thrownBall = null;
+      this.throwHits = null;
+      this.offerMatPer(s.turn.pendingMatPer);
+      return;
+    }
+
+    this.rules.afterThrow(result);
+    this.thrownBall = null;
+    this.throwHits = null;
+
+    if (s.matchOver) {
+      this.endMatch();
+      return;
+    }
+    if (s.roundOver) {
+      this.endRound();
+      return;
+    }
+    this.beginTurn();
+  }
+
+  announce(result) {
+    const turnTeam = TEAMS[this.rules.state.turn.teamIndex];
+    if (result.awards.length) {
+      const award = result.awards[result.awards.length - 1];
+      const text =
+        {
+          tir: 'Tir! +1 point · one extra throw',
+          'matper-hold': 'Mat-per held · +3 points',
+          'matper-knockout': 'Mat-per knocked out · +7 points',
+        }[award.type] || `+${award.points} points`;
+      this.ui.toast(text, TEAMS[award.teamIndex].css);
+      return;
+    }
+    if (result.captures.length) {
+      const capture = result.captures[result.captures.length - 1];
+      this.ui.toast(
+        `Mat ${capture.matIndex + 1} captured for ${TEAMS[capture.teamIndex].name}`,
+        TEAMS[capture.teamIndex].css
+      );
+      return;
+    }
+    if (result.restore.length) {
+      this.ui.toast('Own teammate hit · goolah put back, no point', turnTeam.css);
+      return;
+    }
+    this.ui.toast('No Tir, no Mat · turn passes', turnTeam.css);
+  }
+
+  /* ------------------------------------------------------------ mat-per --- */
+
+  offerMatPer(offer) {
+    this.phase = 'matper';
+    this.hideAimHelpers();
+    const turn = this.rules.state.turn;
+    this.ui.showMatPerChoice(offer.matIndex + 1, TEAMS[turn.teamIndex].name);
+  }
+
+  chooseMatPer(hold) {
+    this.ui.hideMatPerChoice();
+    const team = this.rules.state.turn.teamIndex;
+    const out = this.rules.chooseMatPer(hold);
+    if (!out) {
+      this.beginTurn();
+      return;
+    }
+    if (hold) {
+      this.ui.toast(
+        `Held in mat ${out.matIndex + 1} · chance kept for the next turn`,
+        TEAMS[team].css
+      );
+    }
+    const s = this.rules.state;
+    if (s.matchOver) {
+      this.endMatch();
+      return;
+    }
+    if (s.roundOver) {
+      this.endRound();
+      return;
+    }
+    this.beginTurn();
   }
 
   resetGame() {
-    this.scores = [0, 0];
+    this.rules = new RulesEngine({ round: 1 });
     this.round = 1;
-    this.ui.setScores(this.scores, CONFIG.targetScore);
+    this.thrownBall = null;
+    this.throwHits = null;
     this.ui.hideRoundEnd();
+    this.ui.hideWin();
+    this.ui.hideMatPerChoice();
     this.inputEnabled = true;
-    this.phase = 'ready';
     this.startRound();
   }
 
   /** Snapshot used by the automated checks. */
   state() {
+    const rules = this.rules.describe();
     return {
       phase: this.phase,
       round: this.round,
-      turnSeq: this.turnSeq,
       turn: { teamIndex: this.active.teamIndex, playerIndex: this.active.playerIndex },
-      roundStartTeam: this.roundStartTeam,
-      scores: [...this.scores],
+      scores: [...this.rules.state.scores],
+      rules,
       throwLineZ: CONFIG.throwLineZ,
       matDepth: CONFIG.matDepth,
       matRadius: CONFIG.matRadius,
