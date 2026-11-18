@@ -453,18 +453,35 @@ export class Game {
   resolveCollisions() {
     for (let i = 0; i < this.balls.length; i++) {
       const a = this.balls[i];
-      if (!this.inPlay(a)) continue;
       for (let j = i + 1; j < this.balls.length; j++) {
         const b = this.balls[j];
-        if (!this.inPlay(b)) continue;
+        // One goolah must be moving for a contact to happen, but every goolah on
+        // the field can be struck: a defender waiting at its start (rule 2), a
+        // teammate at the line (rule 7) and one resting in a mat (rule 5).
+        if (a.state !== 'live' && b.state !== 'live') continue;
         const { hit, impactSpeed } = resolveBallCollision(a.body, b.body, CONFIG);
-        if (hit && impactSpeed > 1.6) {
+        if (!hit) continue;
+        if (impactSpeed > 1.6) {
           _a.copy(a.body.pos).lerp(b.body.pos, 0.5);
           this.spawnDust(_a, 0.7, 0.3);
         }
-        if (hit) this.noteHit(a, b);
+        this.wakeBall(a);
+        this.wakeBall(b);
+        this.noteHit(a, b);
       }
     }
+  }
+
+  /**
+   * A goolah that was struck is in motion now, so the physics has to carry it: a
+   * defender rolls, and a goolah resting in a mat can be knocked out of it
+   * (rule 5, case B) or into another mat (rule 8).
+   */
+  wakeBall(ball) {
+    if (ball.state === 'live') return;
+    ball.state = 'live';
+    ball.matIndex = -1;
+    ball.body.resting = false;
   }
 
   /**
