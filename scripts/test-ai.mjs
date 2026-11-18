@@ -181,8 +181,7 @@ eq('every AI seat actually took a throw in each line-up', aiSeatsPlayed, 16);
 /* ------------------------------------------------------- Mat-per decisions --- */
 
 console.log('\nMat-per handling');
-const matPerOffers = full.matPer.offers + measured.beginner.throws * 0
-  + h2hA.matPer.offers + h2hB.matPer.offers;
+const matPerOffers = full.matPer.offers + h2hA.matPer.offers + h2hB.matPer.offers;
 check(
   'AI answered every Mat-per offer it was given',
   matPerOffers > 0 && full.matPer.hold + full.matPer.play + h2hA.matPer.hold + h2hA.matPer.play + h2hB.matPer.hold + h2hB.matPer.play >= matPerOffers,
@@ -209,11 +208,13 @@ check(
 );
 const shooter = ballAt(balls, engine.state.turn.teamIndex, engine.state.turn.playerIndex);
 check('the shooter exists at the active seat', Boolean(shooter), `${engine.state.turn.teamIndex}:${engine.state.turn.playerIndex}`);
-const chooser = createAI({ difficulty: 'beginner', seed: 9 });
-check('a fresh AI is deterministic for a fixed seed',
-  JSON.stringify(chooser.chooseThrow(engine, ballData(balls), CONFIG)) === JSON.stringify(chooser.chooseThrow(engine, ballData(balls), CONFIG)) === false
-    ? false
-    : true);
+const twinA = createAI({ difficulty: 'beginner', seed: 9 });
+const twinB = createAI({ difficulty: 'beginner', seed: 9 });
+check(
+  'two AIs with the same seed make the same first decision',
+  JSON.stringify(twinA.chooseThrow(engine, ballData(balls), CONFIG))
+    === JSON.stringify(twinB.chooseThrow(engine, ballData(balls), CONFIG))
+);
 
 /* ---------------------------------------------------------------- result --- */
 
