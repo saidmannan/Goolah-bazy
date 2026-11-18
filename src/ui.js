@@ -1,4 +1,5 @@
-import { CONFIG, TEAMS } from './config.js';
+import { RULES, matPointsFor } from './rules.js';
+import { TEAMS } from './config.js';
 
 export class UI {
   constructor() {
@@ -12,9 +13,14 @@ export class UI {
       chipsB: $('chipsB'),
       progA: $('progA'),
       progB: $('progB'),
+      matsA: $('matsA'),
+      matsB: $('matsB'),
+      matPerA: $('matPerA'),
+      matPerB: $('matPerB'),
       turnBanner: $('turnBanner'),
       turnText: $('turnText'),
       turnHint: $('turnHint'),
+      turnChance: $('turnChance'),
       powerFill: $('powerFill'),
       toast: $('toast'),
       startOverlay: $('startOverlay'),
@@ -23,23 +29,15 @@ export class UI {
       winOverlay: $('winOverlay'),
       roundTitle: $('roundTitle'),
       roundSub: $('roundSub'),
+      roundSummary: $('roundSummary'),
       winTitle: $('winTitle'),
       winSub: $('winSub'),
+      matPerPanel: $('matPerPanel'),
+      matPerCopy: $('matPerCopy'),
       loader: $('loader'),
     };
 
-    this.onScore = null;
     this.toastTimer = null;
-
-    document.querySelectorAll('.score-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const team = Number(btn.dataset.team);
-        const delta = Number(btn.dataset.delta);
-        if (Number.isFinite(team) && Number.isFinite(delta) && this.onScore) {
-          this.onScore(team, delta);
-        }
-      });
-    });
   }
 
   get overlayOpen() {
@@ -61,8 +59,29 @@ export class UI {
       this.el.scoreB.textContent = String(b);
       this.pop(this.el.scoreB);
     }
-    this.el.progA.style.width = `${(a / target) * 100}%`;
-    this.el.progB.style.width = `${(b / target) * 100}%`;
+    const pct = (v) => `${Math.min(100, (v / target) * 100)}%`;
+    this.el.progA.style.width = pct(a);
+    this.el.progB.style.width = pct(b);
+  }
+
+  /** Mat tally per team for the current round (rule 4). */
+  setMats(captured, mats, matCount) {
+    this.el.matsA.innerHTML = `Mats <b>${captured[0]}</b>/${matCount}`;
+    this.el.matsB.innerHTML = `Mats <b>${captured[1]}</b>/${matCount}`;
+    this.el.cardA.classList.toggle('quota-met', captured[0] >= 2);
+    this.el.cardB.classList.toggle('quota-met', captured[1] >= 2);
+    const open = [];
+    mats.forEach((mat, index) => {
+      if (!mat.completed) open.push(index + 1);
+    });
+    this.el.cardA.title = open.length ? `Open mats: ${open.join(', ')}` : 'All mats completed';
+  }
+
+  /** Rule 5: show which team currently holds a Mat-per goolah. */
+  setMatPer(matPer) {
+    const held = (teamIndex) => matPer[teamIndex].some(Boolean);
+    this.el.matPerA.classList.toggle('hidden', !held(0));
+    this.el.matPerB.classList.toggle('hidden', !held(1));
   }
 
   pop(node) {
@@ -72,7 +91,7 @@ export class UI {
     node.classList.add('pop');
   }
 
-  setTurn(teamIndex, playerIndex) {
+  setTurn(teamIndex, playerIndex, chances = 1, extra = {}) {
     const team = TEAMS[teamIndex];
     const isBlue = teamIndex === 0;
 
@@ -86,8 +105,18 @@ export class UI {
 
     this.el.turnBanner.classList.remove('blue', 'orange');
     this.el.turnBanner.classList.add(team.cssClass);
-    this.el.turnText.textContent = `${team.name} · Player ${playerIndex + 1}`;
-    this.el.turnHint.textContent = 'Drag to aim · release to throw';
+
+    const role = teamIndex === extra.throwingTeam ? 'Throwing' : 'Defending';
+    this.el.turnText.textContent = `${team.name} · Player ${playerIndex + 1} · ${role}`;
+
+    if (extra.finalOpportunity) {
+      this.el.turnChance.textContent = 'Final throw';
+    } else if (extra.matPerHeld) {
+      this.el.turnChance.textContent = 'Mat-per';
+    } else {
+      this.el.turnChance.textContent = `${chances} throw${chances === 1 ? '' : 's'}`;
+    }
+    this.el.turnChance.classList.toggle('locked', Boolean(extra.finalOpportunity));
   }
 
   setTurnHint(text) {
@@ -104,20 +133,11 @@ export class UI {
     node.style.borderColor = color || 'rgba(255, 214, 150, 0.5)';
     node.classList.add('show');
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => node.classList.remove('show'), 1900);
+    this.toastTimer = setTimeout(() => node.classList.remove('show'), 2200);
   }
 
   showHint(text) {
     this.toast(text);
-  }
-
-  pulseScoreButton(teamIndex) {
-    const btn = document.querySelector(`.score-btn.plus[data-team="${teamIndex}"]`);
-    if (!btn) return;
-    btn.classList.remove('hint');
-    void btn.offsetWidth;
-    btn.classList.add('hint');
-    setTimeout(() => btn.classList.remove('hint'), 2800);
   }
 
   hideStart() {
@@ -132,10 +152,45 @@ export class UI {
     this.el.rulesOverlay.classList.add('hidden');
   }
 
-  showRoundEnd(round) {
-    this.el.roundTitle.textContent = `Round ${round} complete`;
-    this.el.roundSub.textContent =
-      'Both teams have thrown. Record the points with + and −, then continue.';
+  /* --------------------------------------------------------- mat-per --- */
+
+  showMatPerChoice(matNumber, teamName) {
+    this.el.matPerCopy.textContent =
+      `Leave the goolah in mat ${matNumber} and keep the chance for your next turn, ` +
+      `or lift it out and throw now (${teamName}).`;
+    this.el.matPerPanel.classList.remove('hidden');
+  }
+
+  hideMatPerChoice() {
+    this.el.matPerPanel.classList.add('hidden');
+  }
+
+  /* -------------------------------------------------- round and match --- */
+
+  showRoundEnd(info) {
+    this.el.roundTitle.textContent = `Round ${info.round} complete`;
+    this.el.roundSub.textContent = 'All four mats are closed. Roles swap for the next round.';
+
+    const rows = [];
+    for (const teamIndex of [0, 1]) {
+      const team = TEAMS[teamIndex];
+      const captured = info.captured[teamIndex];
+      const points = info.matPoints[teamIndex];
+      rows.push(
+        `<li><span class="dot" style="background:${team.css}"></span>` +
+          `<b>${team.name}</b> captured ${captured} mat${captured === 1 ? '' : 's'} · ` +
+          `${points} point${points === 1 ? '' : 's'}</li>`
+      );
+    }
+    rows.push(
+      `<li class="total">Score: ${TEAMS[0].name} <b>${info.scores[0]}</b> — ` +
+        `<b>${info.scores[1]}</b> ${TEAMS[1].name}</li>`
+    );
+    rows.push(
+      `<li class="next">${TEAMS[info.nextThrowingTeam].name} throw${''} first next round · ` +
+        `first to ${RULES.targetScore} wins</li>`
+    );
+    this.el.roundSummary.innerHTML = rows.join('');
     this.el.roundOverlay.classList.remove('hidden');
   }
 
@@ -143,10 +198,17 @@ export class UI {
     this.el.roundOverlay.classList.add('hidden');
   }
 
-  showWin(team) {
-    this.el.winTitle.textContent = `${team.name} team wins`;
-    this.el.winTitle.style.color = team.css;
-    this.el.winSub.textContent = `${CONFIG.targetScore} points reached.`;
+  showWin(team, scores = [0, 0], round = 1) {
+    if (team) {
+      this.el.winTitle.textContent = `${team.name} team wins`;
+      this.el.winTitle.style.color = team.css;
+    } else {
+      this.el.winTitle.textContent = 'Match drawn';
+      this.el.winTitle.style.color = '';
+    }
+    this.el.winSub.textContent =
+      `${scores[0]} — ${scores[1]} after ${round} round${round === 1 ? '' : 's'}. ` +
+      `${RULES.targetScore} points reached.`;
     this.el.winOverlay.classList.remove('hidden');
   }
 

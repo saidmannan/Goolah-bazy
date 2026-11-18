@@ -24,14 +24,14 @@
           <div class="score-card team-a" id="cardA">
             <div class="team-line"><span class="team-dot"></span><span class="team-name">Shānanda</span></div>
             <div class="score-line">
-              <button class="score-btn minus" data-team="0" data-delta="-1" type="button" aria-label="Remove one point from Shānanda team">−</button>
               <div class="score-value" id="scoreA">0</div>
-              <button class="score-btn plus" data-team="0" data-delta="1" type="button" aria-label="Add one point to Shānanda team">+</button>
             </div>
             <div class="chips" id="chipsA">
               <span class="chip" data-player="0">P1</span>
               <span class="chip" data-player="1">P2</span>
             </div>
+            <div class="mat-tally" id="matsA">Mats <b>0</b>/4</div>
+            <span class="matper-tag hidden" id="matPerA">Mat-per</span>
             <div class="progress"><span id="progA"></span></div>
           </div>
 
@@ -41,16 +41,16 @@
           </div>
 
           <div class="score-card team-b" id="cardB">
-            <div class="team-line"><span class="team-dot"></span><span class="team-name">ORANGE</span></div>
+            <div class="team-line"><span class="team-dot"></span><span class="team-name">Zananda</span></div>
             <div class="score-line">
-              <button class="score-btn minus" data-team="1" data-delta="-1" type="button" aria-label="Remove one point from Orange team">−</button>
               <div class="score-value" id="scoreB">0</div>
-              <button class="score-btn plus" data-team="1" data-delta="1" type="button" aria-label="Add one point to Orange team">+</button>
             </div>
             <div class="chips" id="chipsB">
               <span class="chip" data-player="0">P1</span>
               <span class="chip" data-player="1">P2</span>
             </div>
+            <div class="mat-tally" id="matsB">Mats <b>0</b>/4</div>
+            <span class="matper-tag hidden" id="matPerB">Mat-per</span>
             <div class="progress"><span id="progB"></span></div>
           </div>
         </div>
@@ -58,7 +58,17 @@
         <div class="turn-banner" id="turnBanner" role="status" aria-live="polite">
           <span class="turn-pulse"></span>
           <span class="turn-text" id="turnText">Shānanda · Player 1</span>
+          <span class="turn-chance" id="turnChance">1 throw</span>
           <span class="turn-hint" id="turnHint">Drag to aim · release to throw</span>
+        </div>
+
+        <div class="matper-panel hidden" id="matPerPanel" role="dialog" aria-label="Mat-per choice">
+          <p class="matper-title">Mat-per</p>
+          <p class="matper-copy" id="matPerCopy">Leave the goolah in the mat, or throw again.</p>
+          <div class="matper-buttons">
+            <button class="pill" id="matPerHold" type="button">Hold in mat</button>
+            <button class="pill ghost" id="matPerThrow" type="button">Throw now</button>
+          </div>
         </div>
 
         <div class="bottom">
@@ -82,15 +92,15 @@
           <p class="lede">Four mats in a line. Four heavy goolahs. Two teams of two.</p>
           <ul class="facts">
             <li><b>4</b> mats in a straight line</li>
-            <li><b>2</b> mats for each team</li>
+            <li><b>2</b> teams of two players</li>
             <li><b>4</b> metallic goolahs</li>
             <li><b>21</b> points to win</li>
           </ul>
           <button class="cta" id="playBtn" type="button">Play</button>
           <p class="fineprint">
-            Mats 1 and 3 belong to Shānanda, mats 2 and 4 to Orange. Both players of the throwing
-            team throw from the same line behind mat 1. Traditional scoring rules will be wired in
-            from your rule set — until then the scoreboard is kept by hand.
+            One team throws, the other defends. Both throwers use the same line behind mat 1; the
+            defenders start behind mats 1 and 3. A Tir or a Mat earns another throw. Roles swap every
+            round, and the first team to 21 wins.
           </p>
         </div>
       </div>
@@ -101,20 +111,22 @@
           <ol class="rules">
             <li><b>Drag up</b> from your goolah and release to throw it down the line of mats.</li>
             <li><b>Drag left or right</b> while aiming to steer the throw across the line.</li>
-            <li>The <b>longer the drag</b>, the harder the throw. The dotted path and the ring show
-              where it is expected to stop, and a hard throw can carry past mat 4.</li>
-            <li>Both players of one team throw before the other team plays: Shānanda P1, Shānanda P2,
-              then Orange P1, Orange P2.</li>
-            <li>Both players throw from the <b>same line behind mat 1</b>.</li>
-            <li>Goolahs stay on the ground, so a later throw can roll into an earlier one and knock it
-              away or into a mat.</li>
-            <li>Mats are shallow dishes in the dirt, 5 cm deep. Mats 1 and 3 are Shānanda's, mats 2
-              and 4 are Orange's.</li>
+            <li>The <b>longer the drag</b>, the harder the throw. A hard throw can carry past mat 4.</li>
+            <li><b>Turn order:</b> throwing P1, throwing P2, defending P1, defending P2. Both throwers
+              use the same line behind mat 1; defenders start behind mats 1 and 3.</li>
+            <li><b>Tir</b> (hitting an opponent goolah) scores 1 point and one extra throw.</li>
+            <li><b>Mat:</b> a goolah resting in an open hollow captures that mat. Each team's first two
+              mats in a round score nothing; every further mat scores 1 point.</li>
+            <li><b>Mat-per:</b> you may hold a goolah in the mat it captured and keep the chance for
+              your next turn. An opponent who hits it scores 3 if it stays in the hollow, 7 if it is
+              knocked out.</li>
+            <li>Hitting your <b>own teammate</b> scores nothing: their goolah goes back where it was.</li>
+            <li>The round ends when all four mats are closed; the player who closes the last mat gets
+              one final throw at one opponent. Roles then swap.</li>
           </ol>
           <p class="fineprint">
-            Scoring: the traditional rule set has not been added yet, so no rule has been invented —
-            points are recorded by hand with the + and − buttons on each team card. First team to 21
-            wins.
+            First team to 21 points wins. A goolah that stops somewhere unplayable is moved to the
+            nearest playable spot on the way back to the field.
           </p>
           <button class="cta small" id="closeRules" type="button">Got it</button>
         </div>
@@ -123,7 +135,8 @@
       <div class="overlay hidden" id="roundOverlay">
         <div class="panel compact">
           <h2 id="roundTitle">Round complete</h2>
-          <p class="lede" id="roundSub">All four goolahs have been thrown.</p>
+          <p class="lede" id="roundSub">All four mats are closed.</p>
+          <ul class="facts round-summary" id="roundSummary"></ul>
           <button class="cta" id="nextRoundBtn" type="button">Next round</button>
         </div>
       </div>
