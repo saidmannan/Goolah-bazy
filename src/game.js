@@ -14,6 +14,14 @@ import {
   matPointsFor,
   throwingTeamForRound,
 } from './rules.js';
+import {
+  DEFAULT_DIFFICULTY,
+  DEFAULT_SEATS,
+  DIFFICULTY_ORDER,
+  createAI,
+  normalizeSeats,
+  seatKey,
+} from './ai.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 // Every throw travels down the line of mats, away from the shared throw line.
@@ -52,6 +60,16 @@ export class Game {
     // Collisions recorded for the throw currently in flight.
     this.thrownBall = null;
     this.throwHits = null;
+
+    // Phase 3: who plays each seat. The engine, the physics and the HUD do not
+    // care whether a throw came from a human or the AI — both go through
+    // throwBall(), so the AI cannot make a move a human could not make.
+    this.seats = { ...DEFAULT_SEATS };
+    this.difficulty = DEFAULT_DIFFICULTY;
+    this.aiSeats = new Map();
+    this.aiSeed = 1;
+    this.aiTimer = 0;
+    this.autoTimer = 0;
 
     this.aim = { dir: new THREE.Vector3(0, 0, 1), power: 0, angle: 0 };
     this.pointer = null;
@@ -312,6 +330,12 @@ export class Game {
 
     // Rule 5: a held Mat-per goolah waits for its player's next turn.
     if (turn.pendingMatPer) this.offerMatPer(turn.pendingMatPer);
+
+    // An AI seat gets a short beat before it plays, so its turn is watchable.
+    if (this.isAI(turn.teamIndex, turn.playerIndex)) {
+      this.aiTimer = this.prefersReducedMotion() ? 0.2 : 0.9;
+      if (!turn.pendingMatPer) this.ui.setTurnHint(`${team.name} · AI is aiming…`);
+    }
   }
 
   turnHintFor() {
@@ -348,6 +372,8 @@ export class Game {
       scores: [...s.scores],
       nextThrowingTeam: throwingTeamForRound(s.round + 1),
     });
+    // A match with no human in it plays on by itself.
+    if (this.allAI()) this.autoTimer = this.prefersReducedMotion() ? 0.6 : 1.9;
   }
 
   endMatch() {
@@ -370,6 +396,124 @@ export class Game {
     this.restRing.visible = false;
     this.aimRing.visible = false;
     this.marker.visible = false;
+  }
+
+  /* ------------------------------------------------------------ ai seats --- */
+
+  isAI(teamIndex, playerIndex) {
+    return this.seats[seatKey(teamIndex, playerIndex)] === 'ai';
+  }
+
+  isAIActive() {
+    return this.isAI(this.active.teamIndex, this.active.playerIndex);
+  }
+
+  allAI() {
+    return this.balls.every((ball) => this.isAI(ball.teamIndex, ball.playerIndex));
+  }
+
+  /** One AI per seat, seeded once per match so a seat keeps its own habits. */
+  aiFor(teamIndex, playerIndex) {
+    const key = seatKey(teamIndex, playerIndex);
+    let ai = this.aiSeats.get(key);
+    if (!ai) {
+      ai = createAI({
+        difficulty: this.difficulty,
+        seed: this.aiSeed + teamIndex * 7 + playerIndex * 13,
+      });
+      this.aiSeats.set(key, ai);
+    }
+    return ai;
+  }
+
+  /** The field as plain data, the same shape the AI tests feed it. */
+  ballData() {
+    return this.balls.map((ball) => ({
+      teamIndex: ball.teamIndex,
+      playerIndex: ball.playerIndex,
+      state: ball.state,
+      matIndex: ball.matIndex,
+      x: ball.body.pos.x,
+      y: ball.body.pos.y,
+      z: ball.body.pos.z,
+    }));
+  }
+
+  prefersReducedMotion() {
+    return (
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+  }
+
+  /** Let the AI seat look at the field, then play — same phase gates as a human. */
+  updateAI(dt) {
+    if (!this.inputEnabled || this.ui.overlayOpen) return;
+    if (!this.isAIActive()) return;
+
+    if (this.phase === 'matper') {
+      this.aiTimer -= dt;
+      if (this.aiTimer <= 0) this.runAIMatPer();
+      return;
+    }
+
+    if (this.phase === 'ready' && this.turnLock <= 0) {
+      this.aiTimer -= dt;
+      if (this.aiTimer <= 0) this.runAIThrow();
+    }
+  }
+
+  runAIThrow() {
+    if (this.phase !== 'ready' || !this.rules.canThrow()) return;
+    const ai = this.aiFor(this.active.teamIndex, this.active.playerIndex);
+    const action = ai.chooseThrow(this.rules, this.ballData(), CONFIG);
+
+    if (!action || action.pass) {
+      // No legal target at all: hand the turn on through the engine, never by hand.
+      this.rules.endTurn();
+      this.beginTurn();
+      return;
+    }
+
+    // Rule 6: record which single opponent the final throw is aimed at.
+    if (this.rules.state.turn.finalOpportunity && action.target && action.target.kind === 'ball') {
+      this.rules.chooseFinalTarget(action.target.teamIndex, action.target.playerIndex);
+    }
+
+    this.aim.angle = action.angle;
+    this.aim.dir.set(Math.sin(action.angle), 0, Math.cos(action.angle));
+    this.aim.dir.y = 0;
+    this.aim.dir.normalize();
+    this.aim.power = action.power;
+    this.ui.setPower(action.power);
+    this.throwBall(action.power);
+  }
+
+  runAIMatPer() {
+    if (this.phase !== 'matper') return;
+    const ai = this.aiFor(this.active.teamIndex, this.active.playerIndex);
+    const choice = ai.chooseMatPer(this.rules, this.ballData(), CONFIG);
+    this.chooseMatPer(Boolean(choice && choice.hold));
+  }
+
+  updateAutoAdvance(dt) {
+    if (this.autoTimer <= 0) return;
+    this.autoTimer -= dt;
+    if (this.autoTimer > 0) return;
+    if (this.phase === 'roundEnd' && this.allAI()) this.nextRound();
+  }
+
+  /**
+   * Seat changes only happen by restarting the match (the agreed rule), so this
+   * throws the current match away and reopens the setup panel.
+   */
+  openSetup() {
+    this.resetGame();
+    this.inputEnabled = false;
+    this.phase = 'intro';
+    this.hideAimHelpers();
+    this.ui.showStart();
   }
 
   /* -------------------------------------------------------------- throw --- */
@@ -422,6 +566,8 @@ export class Game {
     this.updateCamera(dt);
     this.updateMarker();
     this.updateEffects(dt);
+    this.updateAI(dt);
+    this.updateAutoAdvance(dt);
 
     if (this.phase === 'flying') {
       if (this.allSettled()) {
@@ -644,6 +790,7 @@ export class Game {
       this.inputEnabled &&
       this.turnLock <= 0 &&
       !this.ui.overlayOpen &&
+      !this.isAIActive() && // the AI seat plays itself
       this.rules.canThrow()
     );
   }
@@ -777,6 +924,8 @@ export class Game {
     document.getElementById('rulesBtn').addEventListener('click', () => this.ui.openRules());
     document.getElementById('closeRules').addEventListener('click', () => this.ui.closeRules());
     document.getElementById('resetBtn').addEventListener('click', () => this.resetGame());
+    const setupBtn = document.getElementById('setupBtn');
+    if (setupBtn) setupBtn.addEventListener('click', () => this.openSetup());
     document.getElementById('nextRoundBtn').addEventListener('click', () => this.nextRound());
     document.getElementById('playAgainBtn').addEventListener('click', () => {
       this.ui.hideWin();
@@ -787,11 +936,25 @@ export class Game {
   }
 
   begin() {
+    // The line-up and difficulty chosen in the setup panel apply to this match.
+    const setup = this.ui.setup || {};
+    this.seats = normalizeSeats(setup.seats);
+    this.difficulty = DIFFICULTY_ORDER.includes(setup.difficulty)
+      ? setup.difficulty
+      : DEFAULT_DIFFICULTY;
+    this.aiSeats.clear();
+    this.aiSeed = Math.floor(Math.random() * 1e9) + 1;
+    this.ui.setSeatRoles(this.seats);
+
     this.ui.hideStart();
     this.phase = 'ready';
     this.inputEnabled = true;
     this.startRound();
-    this.ui.showHint(`${TEAMS[this.activeTeamIndex].name} throws first — drag to aim`);
+    this.ui.showHint(
+      this.isAIActive()
+        ? `${TEAMS[this.activeTeamIndex].name} throws first · AI to play`
+        : `${TEAMS[this.activeTeamIndex].name} throws first — drag to aim`
+    );
   }
 
   /* ------------------------------------------------------------- scoring --- */
@@ -911,6 +1074,9 @@ export class Game {
     this.hideAimHelpers();
     const turn = this.rules.state.turn;
     this.ui.showMatPerChoice(offer.matIndex + 1, TEAMS[turn.teamIndex].name);
+    if (this.isAI(turn.teamIndex, turn.playerIndex)) {
+      this.aiTimer = this.prefersReducedMotion() ? 0.2 : 0.9;
+    }
   }
 
   chooseMatPer(hold) {
@@ -944,6 +1110,10 @@ export class Game {
     this.round = 1;
     this.thrownBall = null;
     this.throwHits = null;
+    this.aiSeats.clear();
+    this.aiSeed = Math.floor(Math.random() * 1e9) + 1;
+    this.aiTimer = 0;
+    this.autoTimer = 0;
     this.ui.hideRoundEnd();
     this.ui.hideWin();
     this.ui.hideMatPerChoice();
@@ -957,6 +1127,9 @@ export class Game {
     return {
       phase: this.phase,
       round: this.round,
+      seats: { ...this.seats },
+      difficulty: this.difficulty,
+      aiActive: this.isAIActive(),
       turn: { teamIndex: this.active.teamIndex, playerIndex: this.active.playerIndex },
       scores: [...this.rules.state.scores],
       rules,
