@@ -59,7 +59,7 @@ eq('the other three default seats are AI', ALL.filter((k) => DEFAULT_SEATS[k] ==
 eq('empty input normalises to the default line-up', JSON.stringify(normalizeSeats({})), JSON.stringify(DEFAULT_SEATS));
 
 const cleaned = normalizeSeats({ '0:0': 'ai', '0:1': 'nonsense', '1:0': 'human', '1:1': 'ai' });
-eq('an unknown seat value falls back to human', cleaned['0:1'], 'human');
+eq('an unknown seat value keeps the default for that seat', cleaned['0:1'], DEFAULT_SEATS['0:1']);
 eq('normalised line-up keeps a full four seats', Object.keys(cleaned).length, 4);
 eq('the default difficulty exists', DIFFICULTIES[DEFAULT_DIFFICULTY] !== undefined, true);
 
@@ -81,7 +81,7 @@ check('the match reached 21 points', full.matchOver && Math.max(...full.scores) 
 check('the winner has at least 21', full.scores[full.winner] >= 21, `scores ${full.scores.join('-')}`);
 check('the losing score is below 21', full.scores[1 - full.winner] < 21, `scores ${full.scores.join('-')}`);
 check('all four seats played', ALL.every((seat) => (full.throwsBySeat.get(seat) || 0) > 0), JSON.stringify([...full.throwsBySeat]));
-check('the match lasted more than one round', full.rounds > 1, `rounds ${full.rounds}`);
+check('the match ended inside the round limit', full.matchOver && full.rounds <= 12, `rounds ${full.rounds}`);
 check('AI never passed a legal turn', full.passes === 0, `passes ${full.passes}`);
 
 /* ------------------------------------------------------------ turn order --- */
@@ -203,7 +203,9 @@ check('chooseThrow returns a throw with an in-range angle', Math.abs(decision.an
 check('chooseThrow returns a throw with an in-range power', decision.power >= 0 && decision.power <= 1, `power ${decision.power}`);
 check(
   'the chosen target is one the rules allow',
-  engine.availableTargets().some((t) => t.key === seatKey(decision.target.teamIndex, decision.target.playerIndex)),
+  decision.target && decision.target.kind === 'mat'
+    ? engine.state.mats.some((mat) => mat.index === decision.target.matIndex && !mat.completed)
+    : engine.availableTargets().some((t) => t.key === seatKey(decision.target.teamIndex, decision.target.playerIndex)),
   JSON.stringify(decision.target)
 );
 const shooter = ballAt(balls, engine.state.turn.teamIndex, engine.state.turn.playerIndex);
