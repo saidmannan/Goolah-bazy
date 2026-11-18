@@ -185,11 +185,10 @@ export class RulesEngine {
     const s = this.state;
     s.turn.chances = 0;
     const order = turnOrderFor(s);
-    const next = s.turnIndex + 1;
-    if (next >= order.length) {
-      s.roundOver = true;
-      return s.turn;
-    }
+    /* §1/§4  a round ends when the four mats are closed, not after each player
+       has thrown once, so the order cycles back to the first player (§3 relies
+       on a turn coming around again). */
+    const next = (s.turnIndex + 1) % order.length;
     return this.beginTurn(next);
   }
 

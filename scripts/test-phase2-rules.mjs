@@ -72,7 +72,8 @@ function shoot(engine, shot) {
   miss(e);
   eq('§2 defending P2 is last', `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`, '0:1');
   miss(e);
-  eq('§2 round closes after the fourth player', e.state.roundOver, true);
+  eq('§2 the order cycles back to the first thrower', `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`, '1:0');
+  eq('§2 an open round does not end after four throws', e.state.roundOver, false);
 
   // A new round restores the order and swaps the roles.
   const e2 = new RulesEngine();
@@ -143,11 +144,21 @@ function shoot(engine, shot) {
   shoot(e2, { collisions: [], ownMatIndex: 0 });
   eq('§3 a Mat releases the lockout', e2.availableTargets().length, 2);
 
-  // A fresh round releases it as well (the turn has come around again).
+  // A fresh round releases it as well (all goolahs go back to their spots).
   const e3 = new RulesEngine();
   shoot(e3, { collisions: [{ kind: 'opponent', teamIndex: 0, playerIndex: 0 }], ownMatIndex: -1 });
   e3.startRound(2);
   eq('§3 a new round releases the lockout', e3.availableTargets().length, 2);
+
+  // §3 the target is available again once the turn comes around again.
+  const e4 = new RulesEngine();
+  shoot(e4, { collisions: [{ kind: 'opponent', teamIndex: 0, playerIndex: 0 }], ownMatIndex: -1 });
+  eq('§3 locked on the extra chance', e4.availableTargets().length, 1);
+  miss(e4);
+  miss(e4);
+  miss(e4);
+  eq('§3 the turn comes around again', `${e4.state.turn.teamIndex}:${e4.state.turn.playerIndex}`, '1:0');
+  eq('§3 the target is available again', e4.availableTargets().length, 2);
 }
 
 /* ------------------------------------------------- §4 mat points and quotas -- */
@@ -205,7 +216,10 @@ function shoot(engine, shot) {
   eq('§5 the held mat is marked', e.state.mats[0].matPer.playerIndex, 0);
 
   // On the holder's next turn the chance is still waiting.
-  e.startRound(1);
+  miss(e);
+  miss(e);
+  miss(e);
+  eq('§5 the holder is on the field again', `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`, '1:0');
   eq('§5 the held chance is offered next turn', e.state.turn.pendingMatPer ? 1 : 0, 1);
   eq('§5 the holder may hold again', e.state.turn.pendingMatPer.matIndex, 0);
 
@@ -340,15 +354,8 @@ function shoot(engine, shot) {
   eq('§6 the final throw cannot be repeated', e.canThrow(), false);
 
   // The teammate's unused chance is lost with the round.
-  const t = new RulesEngine();
-  t.startRound(1);
-  t.state.turnIndex = 3; // defending P2 is on the field, throwing P2 never played
-  t.state.finalMat = { teamIndex: 0, playerIndex: 1, matIndex: 3, used: false, targetsRemaining: 1 };
-  t.state.mats.forEach((m) => {
-    m.completed = true;
-  });
-  t.afterThrow({ extraChance: false });
-  eq('§6 the round closes after the final opportunity', t.state.roundOver, true);
+  eq('§6 no teammate turn is granted after the final throw', e.state.roundOver, true);
+  eq('§6 the final throw is the last action of the round', e.canThrow(), false);
 }
 
 /* ------------------------------------------------ §7 teammate collisions -- */
