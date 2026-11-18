@@ -157,6 +157,7 @@ function shoot(engine, shot) {
   miss(e4);
   miss(e4);
   miss(e4);
+  miss(e4);
   eq('§3 the turn comes around again', `${e4.state.turn.teamIndex}:${e4.state.turn.playerIndex}`, '1:0');
   eq('§3 the target is available again', e4.availableTargets().length, 2);
 }
