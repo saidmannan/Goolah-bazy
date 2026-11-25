@@ -18,7 +18,7 @@
 // docs are measured by scripts/test-ai.mjs from real simulated play, not stored
 // here as a claim.
 import { simulateShot } from './physics.js';
-import { CONFIG } from './config.js';
+import { CONFIG, isPlayablePoint } from './config.js';
 import { ballKey } from './rules.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -315,7 +315,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       contacts,
       selfMat: matAt(rest.x, rest.z, cfg),
       teammateHit,
-      offField: Math.abs(rest.x) > 6.5 || rest.z > 12 || rest.z < -8.5,
+      offField: !isPlayablePoint(rest.x, rest.z),
     };
   }
 
@@ -575,7 +575,30 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     });
     scored.sort((a, b) => b.value - a.value);
 
-    const pool = scored.slice(0, Math.max(1, profile.picks));
+    // Nothing reachable: this goolah finished somewhere from which the aim
+    // clamp cannot even point at a mat (for example past the last mat). Heaving
+    // at full power only throws the goolah further away, so tap it instead and
+    // keep it on the field.
+    const reachable = scored.filter((entry) => entry.aim.reachable);
+    if (reachable.length === 0) {
+      const fallback = scored[0];
+      const power = clamp(Math.min(fallback.aim.power, 0.22), 0.06, 1);
+      return {
+        type: 'throw',
+        angle: clamp(fallback.aim.angle, -cfg.maxAimAngle, cfg.maxAimAngle),
+        power,
+        intended: {
+          kind: 'nudge',
+          key: fallback.candidate.key,
+          angle: fallback.aim.angle,
+          power,
+          value: fallback.value,
+        },
+        target: fallback.candidate.target,
+      };
+    }
+
+    const pool = reachable.slice(0, Math.max(1, profile.picks));
     const pick = weightedPick(pool);
     const aim =
       pick.candidate.type === 'mat'

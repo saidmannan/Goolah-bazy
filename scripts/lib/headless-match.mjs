@@ -8,14 +8,14 @@
 // Nothing here is a second rules implementation: the harness only turns a throw
 // into a collision report (exactly the shape game.js builds) and hands it to
 // RulesEngine.
-import { CONFIG, defenderPosition, throwPosition } from '../../src/config.js';
+import { CONFIG, defenderPosition, isPlayablePoint, throwPosition } from '../../src/config.js';
 import {
   createBody,
   resolveBallCollision,
   stepBallMotion,
   throwVelocity,
 } from '../../src/physics.js';
-import { RulesEngine, RULES, ballKey } from '../../src/rules.js';
+import { RulesEngine, RULES, ballKey, rakhPosition } from '../../src/rules.js';
 import {
   DEFAULT_DIFFICULTY,
   DIFFICULTIES,
@@ -88,6 +88,20 @@ export function ballData(balls) {
 /** A stopped goolah settles into a mat if it finished inside one. */
 export function settle(balls) {
   for (const ball of balls) {
+    // Rule 9: a goolah that stopped somewhere unplayable comes back to the
+    // nearest playable spot on a straight line toward the field. Without this
+    // the harness let goolahs roll away forever and every later shot was taken
+    // from off the field.
+    const spot = rakhPosition(
+      { x: ball.body.pos.x, z: ball.body.pos.z },
+      isPlayablePoint,
+      { toward: { x: CONFIG.matX, z: 0 }, step: 0.1, maxDistance: 26 }
+    );
+    if (spot.applied) {
+      ball.body.pos.set(spot.x, CONFIG.ballRadius, spot.z);
+      ball.body.vel.set(0, 0, 0);
+      ball.body.resting = true;
+    }
     const mat = matAt(ball.body.pos.x, ball.body.pos.z);
     if (mat >= 0) {
       ball.state = 'mat';
