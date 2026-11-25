@@ -486,10 +486,10 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         } else {
           value -= 2.5; // blocked, short, or aimed at where the goolah is not
         }
-      } else if (candidate.blocked) {
-        // Another goolah stands on the line, so the ball is deflected before it
-        // reaches the dish: the unobstructed prediction above is not what will
-        // happen. Chasing this mat is a wasted chance.
+      } else if (candidate.blocked || prediction.contacts.length > 0) {
+        // Something stands between the shooter and the dish. predict() reports
+        // selfMat from the unobstructed path, but a ball that strikes another
+        // goolah is deflected before it arrives, so this mat is not makeable.
         value -= 3.5;
       } else if (prediction.selfMat === candidate.matIndex) {
         value += 2.0;
@@ -612,7 +612,9 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       const best = pool[0];
       const futileMat = best.candidate.type === 'mat'
         && (best.candidate.blocked
-          || (best.prediction && best.prediction.selfMat !== best.candidate.matIndex));
+          || (best.prediction
+            && (best.prediction.selfMat !== best.candidate.matIndex
+              || best.prediction.contacts.length > 0)));
       if (futileMat) {
         const tir = reachable.find((entry) => entry.candidate.type === 'tir');
         if (tir) pool.splice(0, pool.length, tir);
