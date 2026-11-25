@@ -217,8 +217,25 @@ function matAt(x, z, cfg) {
   return -1;
 }
 
-/** Closest point on the straight ground path start -> rest, as a fraction t. */
-function closestOnPath(start, rest, point) {
+/**
+ * Is another goolah standing on the straight line from shooter to (x, z)?
+ *
+ * The goolahs collide, so a ball on the line deflects the shot: a mat behind
+ * one is not makeable, and a "prediction" that ignores this is a fantasy. The
+ * threshold matches the collision distance used by the integrator.
+ */
+function lineBlocked(shooter, x, z, balls, cfg) {
+  const target = { x, z };
+  for (const ball of balls) {
+    if (ball.teamIndex === shooter.teamIndex && ball.playerIndex === shooter.playerIndex) continue;
+    const point = closestOnPath(shooter, target, ball);
+    const lateral = Math.hypot(ball.x - point.x, ball.z - point.z);
+    if (lateral <= cfg.ballRadius * 2 + 0.02) return true;
+  }
+  return false;
+}
+
+/** Closest point on the straight ground path start -> rest, as a fraction t. */function closestOnPath(start, rest, point) {
   const dx = rest.x - start.x;
   const dz = rest.z - start.z;
   const len2 = dx * dx + dz * dz;
@@ -425,6 +442,10 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         matPer: false,
         x: cfg.matX,
         z: cfg.matZ[mat.index],
+        // A goolah sitting on the line deflects the shot, so a blocked mat is
+        // not really makeable — the AI must see the obstruction, not the
+        // unobstructed fantasy line.
+        blocked: lineBlocked(shooter, cfg.matX, cfg.matZ[mat.index], balls, cfg),
         target: { kind: 'mat', matIndex: mat.index },
       });
     }
