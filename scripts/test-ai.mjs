@@ -155,7 +155,14 @@ const proPoints = h2hA.pointsByTeam[0] + h2hB.pointsByTeam[1];
 const begPoints = h2hA.pointsByTeam[1] + h2hB.pointsByTeam[0];
 console.log(`  Professional ${proPoints} points · Beginner ${begPoints} points over two matches`);
 check('both head-to-head matches were legal', h2hA.illegal.length === 0 && h2hB.illegal.length === 0, [...h2hA.illegal, ...h2hB.illegal].slice(0, 3).join(' | '));
-check('Professional outscores Beginner over both matches', proPoints > begPoints, `${proPoints} vs ${begPoints}`);
+// Over two matches of different length a raw points total says more about how
+// long the match ran than about who played better, so the real question is who
+// won each match. The roles swap between the two matches.
+check(
+  'Professional beats Beginner in both head-to-head matches',
+  h2hA.pointsByTeam[0] > h2hA.pointsByTeam[1] && h2hB.pointsByTeam[1] > h2hB.pointsByTeam[0],
+  `match A ${h2hA.pointsByTeam[0]}-${h2hA.pointsByTeam[1]} · match B ${h2hB.pointsByTeam[1]}-${h2hB.pointsByTeam[0]}`
+);
 
 /* ------------------------------------------------------------- seat matrix --- */
 

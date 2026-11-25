@@ -32,6 +32,7 @@ export const DIFFICULTIES = {
     picks: 3, // chooses among its three best ideas
     rollout: false, // no look-ahead: aims at what looks good
     refine: 0,
+    refuseFutile: false, // attempts a mat even when it can see it will miss
   },
   intermediate: {
     id: 'intermediate',
@@ -41,6 +42,7 @@ export const DIFFICULTIES = {
     picks: 2,
     rollout: true,
     refine: 4,
+    refuseFutile: true,
   },
   professional: {
     id: 'professional',
@@ -50,6 +52,7 @@ export const DIFFICULTIES = {
     picks: 1,
     rollout: true,
     refine: 6,
+    refuseFutile: true,
   },
 };
 
@@ -599,6 +602,22 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     }
 
     const pool = reachable.slice(0, Math.max(1, profile.picks));
+
+    // Judgement. A stronger player does not take a shot it can already see will
+    // fail: when the best idea is a mat whose line is obstructed or whose
+    // prediction misses the dish, switch to the best legal Tir instead of
+    // burning the chance. This is skill expressed through the same physics the
+    // shot will use, not a hand-tuned hit percentage.
+    if (profile.refuseFutile) {
+      const best = pool[0];
+      const futileMat = best.candidate.type === 'mat'
+        && (best.candidate.blocked
+          || (best.prediction && best.prediction.selfMat !== best.candidate.matIndex));
+      if (futileMat) {
+        const tir = reachable.find((entry) => entry.candidate.type === 'tir');
+        if (tir) pool.splice(0, pool.length, tir);
+      }
+    }
     const pick = weightedPick(pool);
     const aim =
       pick.candidate.type === 'mat'
