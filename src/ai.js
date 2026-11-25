@@ -155,7 +155,7 @@ export function rangeTable(cfg = CONFIG) {
       { x: 0, y: 0, z: 1 },
       power,
       cfg,
-      { step: 1 / 60, maxTime: 14, surface }
+      { step: 1 / 120, maxTime: 14, surface }
     );
     rows.push({ power, distance: shot.along });
   }
@@ -282,7 +282,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       dir,
       power,
       cfg,
-      { step: 1 / 60, maxTime: 14, surface }
+      { step: 1 / 120, maxTime: 14, surface }
     );
     const rest = shot.rest;
     const total = Math.hypot(rest.x - shooter.x, rest.z - shooter.z);
@@ -341,7 +341,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         dir,
         power,
         cfg,
-        { step: 1 / 60, maxTime: 14, surface }
+        { step: 1 / 120, maxTime: 14, surface }
       );
       return Math.hypot(shot.rest.x - shooter.x, shot.rest.z - shooter.z) - target;
     };
