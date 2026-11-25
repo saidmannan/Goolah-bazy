@@ -483,13 +483,16 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         } else {
           value -= 2.5; // blocked, short, or aimed at where the goolah is not
         }
+      } else if (candidate.blocked) {
+        // Another goolah stands on the line, so the ball is deflected before it
+        // reaches the dish: the unobstructed prediction above is not what will
+        // happen. Chasing this mat is a wasted chance.
+        value -= 3.5;
       } else if (prediction.selfMat === candidate.matIndex) {
         value += 2.0;
       } else {
         value -= 1.5;
       }
-      // A mat attempt that touches another goolah is deflected off the dish.
-      if (candidate.type === 'mat' && prediction.contacts.length > 0) value -= 2.0;
       if (prediction.teammateHit) value -= 1.5; // rule 7: no point, no chance
       if (prediction.offField) value -= 2.5; // would need Rakh
       if (prediction.selfMat >= 0 && candidate.type === 'tir') value += 1.5;
