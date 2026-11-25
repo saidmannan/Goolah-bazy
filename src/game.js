@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { CONFIG, TEAMS, homePosition, startPosition, throwPosition } from './config.js';
+import { CONFIG, TEAMS, homePosition, isPlayablePoint, startPosition, throwPosition } from './config.js';
+import { rakhPosition } from './rules.js';
 import {
   createBody,
   stepBallMotion,
@@ -990,7 +991,43 @@ export class Game {
     return { collisions, ownMatIndex };
   }
 
+  /**
+   * Rule 9: Rakh. A goolah that stopped somewhere unplayable is placed at the
+   * nearest playable spot on a straight line back toward the field. Ordinary
+   * obstacles that leave it playable are not Rakh, so only genuinely
+   * unreachable positions are moved.
+   */
+  applyRakh() {
+    let moved = false;
+    for (const ball of this.balls) {
+      const pos = ball.body.pos;
+      if (isPlayablePoint(pos.x, pos.z)) continue;
+      const spot = rakhPosition(
+        { x: pos.x, z: pos.z },
+        isPlayablePoint,
+        { toward: { x: CONFIG.matX, z: 0 }, step: 0.1, maxDistance: 26 }
+      );
+      pos.set(spot.x, CONFIG.ballRadius, spot.z);
+      ball.body.vel.set(0, 0, 0);
+      ball.body.resting = true;
+      ball.group.position.copy(pos);
+      let matIndex = -1;
+      for (let i = 0; i < CONFIG.matZ.length; i += 1) {
+        const d = Math.hypot(spot.x - CONFIG.matX, spot.z - CONFIG.matZ[i]);
+        if (d <= CONFIG.matRadius * 0.75) { matIndex = i; break; }
+      }
+      ball.state = matIndex >= 0 ? 'mat' : 'settled';
+      ball.matIndex = matIndex;
+      moved = true;
+    }
+    if (moved) this.ui.showHint('Rakh — goolah returned to the nearest playable spot');
+    return moved;
+  }
+
   finishThrow() {
+    // Rule 9 runs before scoring, so the throw is judged from the position the
+    // goolah is actually played from.
+    this.applyRakh();
     const result = this.rules.resolveThrow(this.buildShotReport());
     this.applyResult(result);
   }

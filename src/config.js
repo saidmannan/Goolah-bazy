@@ -76,6 +76,12 @@ export const CONFIG = {
   // A goolah has to be rolling gently to settle into a mat.
   captureSpeed: 2.6,
 
+  /* ------------------------------------------------------ rule 9: Rakh ---- */
+  // There is no painted boundary: the dirt strip is the playable field. A
+  // goolah that leaves it (ditch, water channel, deep depression) is
+  // unplayable, and rule 9 returns it to the nearest playable spot.
+  playArea: { halfWidth: 4.6, minZ: -14.6, maxZ: 14.6 },
+
   /* -------------------------------------------------------------- teams ---- */
   playerCount: 2,
   throwsPerRound: 4,
@@ -87,6 +93,13 @@ export const TEAMS = [
 ];
 
 export const MAT_COUNT = CONFIG.matZ.length;
+
+/** Rule 9: is a goolah at this point playable, or is it Rakh? */
+export function isPlayablePoint(x, z) {
+  return Math.abs(x) <= CONFIG.playArea.halfWidth
+    && z >= CONFIG.playArea.minZ
+    && z <= CONFIG.playArea.maxZ;
+}
 
 /** Centre of a mat on the ground plane (0-based index). */
 export function matCenter(index) {
