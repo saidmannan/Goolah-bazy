@@ -53,7 +53,6 @@ export const DIFFICULTIES = {
     rollout: true,
     refine: 6,
     refuseFutile: true,
-    preferTir: true,
   },
 };
 
@@ -604,16 +603,6 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
 
     const pool = reachable.slice(0, Math.max(1, profile.picks));
 
-    // A connecting Tir scores a point at once and grants another chance, while a
-    // missed mat simply ends the turn (rule 3). A strong player therefore takes
-    // the point on offer instead of gambling on a dish it cannot make.
-    if (profile.preferTir) {
-      const connects = (entry) => entry.candidate.type === 'tir'
-        && entry.prediction
-        && entry.prediction.contacts.some((c) => c.key === entry.candidate.key);
-      const tir = pool.find(connects) || reachable.find(connects);
-      if (tir) pool.splice(0, pool.length, tir);
-    }
 
     // Judgement. A stronger player does not take a shot it can already see will
     // fail: when the best idea is a mat whose line is obstructed or whose
