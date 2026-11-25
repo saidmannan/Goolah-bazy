@@ -544,6 +544,32 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     return scored.length ? scored[0].target : opponents[0];
   }
 
+  /**
+   * The power that really stops inside the dish. predict() is the same oracle
+   * the value function trusts, so a mat is never thrown with a power that the
+   * simulation already knows misses.
+   */
+  function solveMatPower(shooter, candidate, aim, balls, cfg) {
+    const lands = (power) => predict(shooter, aim.angle, power, balls, cfg).selfMat === candidate.matIndex;
+    if (lands(aim.power)) return aim;
+    const steps = profile.picks > 1 ? 12 : 26;
+    let best = null;
+    let bestError = Infinity;
+    for (let i = 0; i <= steps; i += 1) {
+      const power = 0.08 + (1 - 0.08) * (i / steps);
+      const prediction = predict(shooter, aim.angle, power, balls, cfg);
+      if (prediction.selfMat !== candidate.matIndex) continue;
+      const dx = prediction.rest.x - candidate.x;
+      const dz = prediction.rest.z - candidate.z;
+      const error = dx * dx + dz * dz;
+      if (error < bestError) {
+        bestError = error;
+        best = power;
+      }
+    }
+    return best === null ? aim : { ...aim, power: best };
+  }
+
   function chooseThrow(engine, balls, cfg = CONFIG) {
     if (!engine.canThrow()) return { pass: true };
     const turn = engine.state.turn;
@@ -622,9 +648,11 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       }
     }
     const pick = weightedPick(pool);
+    // Execute a mat with a power predict() has verified stops inside the dish.
+    // Solving it separately from the predicted shot is what made mats miss.
     const aim =
       pick.candidate.type === 'mat'
-        ? refineMatPower(shooter, pick.candidate, pick.aim, cfg)
+        ? solveMatPower(shooter, pick.candidate, pick.aim, balls, cfg)
         : pick.aim;
 
     // Execution error: this is what separates the three levels.
