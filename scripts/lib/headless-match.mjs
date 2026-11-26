@@ -322,8 +322,12 @@ export function playMatch(options = {}) {
     } else if (target.kind === 'mat') {
       const mat = s.mats[target.matIndex];
       if (!mat || mat.completed) stats.illegal.push(`illegal mat target at ${seat}`);
-    } else {
+    } else if (legalTargets.length) {
       stats.illegal.push(`throw without a target at ${seat}`);
+    } else {
+      // Every dish is closed and both opponents are locked out, but the rules
+      // still require a throw, so an untargeted throw is the only legal action.
+      stats.noTargetThrows = (stats.noTargetThrows || 0) + 1;
     }
 
     const { hits } = runShot(balls, shooter, action.angle, action.power);
