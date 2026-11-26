@@ -302,113 +302,162 @@ function canvasTexture(canvas, repeatX = 1, repeatY = 1, renderer = null) {
 /* ---------------------------------------------------------------- ground --- */
 
 /**
- * The court: a rectangle with a real circular hole cut at each mat. The holes
- * are what let the dishes sit *in* the ground instead of floating on it.
+ * The ground is one continuous surface, described by terrain.js and meshed here
+ * in two passes:
  *
- * ShapeGeometry works in XY and its UVs are the shape coordinates, so after the
- * mesh is laid flat the UVs are world XZ — the dirt texture therefore tiles in
- * metres with no manual UV work.
+ *   * the court: a fine grid over the swept strip, with a real circular hole cut
+ *     at every mat so each modelled dish sits *in* the earth;
+ *   * the plain: a coarse grid for everything beyond, sunk a centimetre under
+ *     the court's margin so the two overlap without a seam or a crack.
+ *
+ * Soil variation rides in the vertex colours (damp patches, dry sweeps, scuffed
+ * throwing lanes) and grit rides in the texture, so the field never reads as a
+ * flat brown plane even where the relief is nearly zero.
  */
-function createCourt(renderer) {
-  const w = COURT.halfWidth;
-  const shape = new THREE.Shape();
-  // Shape Y maps to world -Z after rotateX(-90deg), so build it mirrored and the
-  // court lands exactly on the configured Z range.
-  shape.moveTo(-w, -COURT.minZ);
-  shape.lineTo(w, -COURT.minZ);
-  shape.lineTo(w, -COURT.maxZ);
-  shape.lineTo(-w, -COURT.maxZ);
-  shape.closePath();
+const GROUND = {
+  courtCell: 0.11,
+  plainCell: 1.5,
+  plainSize: 168,
+  uvScale: 4.2,
+};
 
-  for (const z of CONFIG.matZ) {
-    const hole = new THREE.Path();
-    hole.absarc(CONFIG.matX, -z, CONFIG.matRadius * 1.26, 0, Math.PI * 2, true);
-    shape.holes.push(hole);
+function soilColor(x, z, onCourt, out) {
+  const damp = valueNoise(x * 0.42 + 11.3, z * 0.42 - 7.9) * 0.5 + 0.5;
+  const dry = valueNoise(x * 1.9 - 3.4, z * 1.9 + 5.6) * 0.5 + 0.5;
+  const scuff = onCourt ? Math.max(0, valueNoise(x * 0.85 + 21.7, z * 0.34 - 13.2)) * 0.05 : 0;
+  const light = (onCourt ? 0.8 : 0.72) + (damp - 0.5) * 0.16 + (dry - 0.5) * 0.06 + scuff;
+  return out.setHSL(0.088 + (damp - 0.5) * 0.02, 0.11 + dry * 0.07, light);
+}
+
+/**
+ * A displaced grid over one rectangle of ground. Quads whose centre fails the
+ * skip test are dropped, which is how the mat holes are cut and how the plain
+ * steps around the court.
+ */
+function buildGroundGeometry({ minX, maxX, minZ, maxZ, cell, skip, onCourt }) {
+  const nx = Math.max(1, Math.round((maxX - minX) / cell));
+  const nz = Math.max(1, Math.round((maxZ - minZ) / cell));
+  const dx = (maxX - minX) / nx;
+  const dz = (maxZ - minZ) / nz;
+  const cols = nx + 1;
+
+  const positions = new Float32Array(cols * (nz + 1) * 3);
+  const uvs = new Float32Array(cols * (nz + 1) * 2);
+  const colors = new Float32Array(cols * (nz + 1) * 3);
+  const color = new THREE.Color();
+
+  let p = 0;
+  let u = 0;
+  let c = 0;
+  for (let j = 0; j <= nz; j++) {
+    const z = minZ + j * dz;
+    for (let i = 0; i <= nx; i++) {
+      const x = minX + i * dx;
+      positions[p++] = x;
+      positions[p++] = terrainHeight(x, z) - (onCourt ? 0 : COURT.sink);
+      positions[p++] = z;
+      uvs[u++] = x / GROUND.uvScale;
+      uvs[u++] = z / GROUND.uvScale;
+      soilColor(x, z, onCourt, color);
+      colors[c++] = color.r;
+      colors[c++] = color.g;
+      colors[c++] = color.b;
+    }
   }
 
-  const geometry = new THREE.ShapeGeometry(shape, 30);
-  geometry.rotateX(-Math.PI / 2);
+  const indices = [];
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (skip && skip(minX + (i + 0.5) * dx, minZ + (j + 0.5) * dz)) continue;
+      const a = j * cols + i;
+      const b = a + 1;
+      const d = a + cols;
+      const cc = d + 1;
+      indices.push(a, d, b, b, d, cc);
+    }
+  }
 
-  const map = canvasTexture(courtCanvas(), 1 / 5, 1 / 5, renderer);
-  const bump = new THREE.CanvasTexture(courtCanvas(512));
-  bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
-  bump.repeat.set(1 / 5, 1 / 5);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
 
-  const material = new THREE.MeshStandardMaterial({
-    map,
-    bumpMap: bump,
-    bumpScale: 0.5,
+function groundTexture(canvas, renderer, srgb) {
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
+  const maxAniso = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
+  texture.anisotropy = Math.min(8, maxAniso);
+  return texture;
+}
+
+function createGround(renderer) {
+  const group = new THREE.Group();
+  const matHole = MAT.holeRadius * CONFIG.matRadius;
+
+  const courtMat = new THREE.MeshStandardMaterial({
+    map: groundTexture(courtCanvas(1024), renderer, true),
+    bumpMap: groundTexture(courtCanvas(512), renderer, false),
+    bumpScale: 0.4,
     roughness: 0.97,
     metalness: 0.02,
-    color: 0xffffff,
+    vertexColors: true,
   });
 
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.y = 0;
-  mesh.receiveShadow = true;
-  return mesh;
-}
-
-/** The plain around the court, sitting slightly lower so the court reads raised. */
-function createPlain(renderer) {
-  const map = canvasTexture(dirtCanvas(), 1 / 9, 1 / 9, renderer);
-  const bump = new THREE.CanvasTexture(dirtCanvas(512));
-  bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
-  bump.repeat.set(1 / 9, 1 / 9);
-
-  const material = new THREE.MeshStandardMaterial({
-    map,
-    bumpMap: bump,
-    bumpScale: 0.6,
+  const plainMat = new THREE.MeshStandardMaterial({
+    map: groundTexture(dirtCanvas(), renderer, true),
+    bumpMap: groundTexture(dirtCanvas(512), renderer, false),
+    bumpScale: 0.5,
     roughness: 1,
     metalness: 0,
-    color: 0xcfb189,
+    vertexColors: true,
   });
 
-  const plain = new THREE.Mesh(new THREE.PlaneGeometry(170, 170, 1, 1), material);
-  plain.rotation.x = -Math.PI / 2;
-  plain.position.y = -COURT.drop;
+  // The court: fine grid, real holes at the four mats.
+  const court = new THREE.Mesh(
+    buildGroundGeometry({
+      minX: -COURT.halfWidth,
+      maxX: COURT.halfWidth,
+      minZ: COURT.minZ,
+      maxZ: COURT.maxZ,
+      cell: GROUND.courtCell,
+      onCourt: true,
+      skip: (cx, cz) =>
+        CONFIG.matZ.some(
+          (mz) => Math.hypot(cx - CONFIG.matX, cz - mz) < matHole
+        ),
+    }),
+    courtMat
+  );
+  court.receiveShadow = true;
+  court.name = 'court';
+  group.add(court);
+
+  // The plain: coarse grid that steps around the court and sits under its margin.
+  const half = GROUND.plainSize / 2;
+  const plain = new THREE.Mesh(
+    buildGroundGeometry({
+      minX: -half,
+      maxX: half,
+      minZ: -half,
+      maxZ: half,
+      cell: GROUND.plainCell,
+      onCourt: false,
+      skip: (cx, cz) =>
+        Math.abs(cx) < COURT.halfWidth && cz > COURT.minZ && cz < COURT.maxZ,
+    }),
+    plainMat
+  );
   plain.receiveShadow = true;
-  return plain;
-}
+  plain.name = 'plain';
+  group.add(plain);
 
-/** Low packed-earth berms along the four edges of the court. */
-function createBerms() {
-  const group = new THREE.Group();
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xa9784a,
-    roughness: 1,
-    metalness: 0,
-    flatShading: true,
-  });
-
-  const width = COURT.halfWidth * 2;
-  const length = COURT.maxZ - COURT.minZ;
-  const midZ = (COURT.maxZ + COURT.minZ) / 2;
-
-  const longEdge = new THREE.CapsuleGeometry(0.17, length, 3, 10);
-  longEdge.rotateX(Math.PI / 2);
-  for (const side of [-1, 1]) {
-    const berm = new THREE.Mesh(longEdge, material);
-    berm.position.set(side * (COURT.halfWidth + 0.05), -0.06, midZ);
-    berm.scale.set(1.35, 0.72, 1);
-    berm.castShadow = true;
-    berm.receiveShadow = true;
-    group.add(berm);
-  }
-
-  const shortEdge = new THREE.CapsuleGeometry(0.17, width, 3, 10);
-  shortEdge.rotateZ(Math.PI / 2);
-  for (const z of [COURT.minZ - 0.05, COURT.maxZ + 0.05]) {
-    const berm = new THREE.Mesh(shortEdge, material);
-    berm.position.set(0, -0.06, z);
-    berm.scale.set(1, 0.72, 1.35);
-    berm.castShadow = true;
-    berm.receiveShadow = true;
-    group.add(berm);
-  }
-
-  return group;
+  return { group, court, plain };
 }
 
 /** The shared throwing line, painted on the court with worn edges. */
@@ -480,53 +529,6 @@ function createThrowLine() {
 
 /* ------------------------------------------------------------------ mats --- */
 
-/**
- * The turned profile of one dish, as (radius, height) pairs.
- *
- * Reading outward: recessed floor at -depth, a floor that lifts gently into a
- * curved inner wall, a raised rim crest just above the court, then a collar that
- * drops away under the dirt. The collar deliberately runs past the hole radius
- * (1.26R) so the cut edge of the court overhangs it and there is no seam.
- */
-function dishProfile(R, D) {
-  return [
-    [0.0, -D],
-    [0.26 * R, -D * 0.998],
-    [0.52 * R, -D * 0.985],
-    [0.70 * R, -D * 0.93],
-    [0.81 * R, -D * 0.70],
-    [0.89 * R, -D * 0.42],
-    [0.95 * R, -D * 0.16],
-    [0.99 * R, 0.016],
-    [1.045 * R, 0.004],
-    [1.12 * R, -0.024],
-    [1.26 * R, -0.042],
-    [1.46 * R, -0.1],
-  ].map(([x, y]) => new THREE.Vector2(x, y));
-}
-
-function matFloorCanvas() {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
-  grad.addColorStop(0, '#150d06');
-  grad.addColorStop(0.55, '#2b1b0d');
-  grad.addColorStop(0.88, '#4d3319');
-  grad.addColorStop(1, '#6b4726');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 128, 128);
-
-  // Grit in the bottom of the hollow.
-  for (let i = 0; i < 900; i++) {
-    const x = Math.random() * 128;
-    const y = Math.random() * 128;
-    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(150,116,74,0.35)' : 'rgba(30,18,8,0.4)';
-    ctx.fillRect(x, y, 1 + Math.random() * 1.6, 1 + Math.random() * 1.6);
-  }
-  return canvas;
-}
-
 function matLabelCanvas(number, cssColor) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
@@ -556,38 +558,23 @@ function matLabelCanvas(number, cssColor) {
 }
 
 /**
- * Four modelled dishes in a line. Each mat reports its own state so the field
- * itself shows whether it is open, holding a goolah, or closed for the round.
+ * Four modelled dishes in a line, each sunk into the hole cut for it.
+ *
+ * The dish geometry comes from models.js and its profile from terrain.js — the
+ * same profile the physics samples — so the rim a goolah climbs is exactly the
+ * rim drawn on screen. Each mat reports its own state, so the field itself shows
+ * whether it is open, holding a goolah, or closed for the round.
  */
 function createMats(scene, renderer) {
   const mats = [];
   const R = CONFIG.matRadius;
   const D = CONFIG.matDepth;
 
-  const floorTex = new THREE.CanvasTexture(matFloorCanvas());
-  floorTex.colorSpace = THREE.SRGBColorSpace;
-
-  // One lathe profile is shared by all four dishes.
-  const dishGeo = new THREE.LatheGeometry(dishProfile(R, D), 56);
-  const floorGeo = new THREE.CircleGeometry(0.62 * R, 28).rotateX(-Math.PI / 2);
-  const capGeo = new THREE.CylinderGeometry(0.56 * R, 0.6 * R, 0.05, 28);
-
-  const dishMat = new THREE.MeshStandardMaterial({
-    color: 0x6d4826,
-    roughness: 0.96,
-    metalness: 0.02,
-    side: THREE.DoubleSide,
-    flatShading: false,
-  });
-  const floorMat = new THREE.MeshStandardMaterial({
-    map: floorTex,
-    roughness: 1,
-    metalness: 0,
-  });
+  const capGeo = new THREE.CylinderGeometry(0.62 * R, 0.68 * R, 0.055, 30);
   const capMat = new THREE.MeshStandardMaterial({
-    color: 0x9d8a6c,
-    roughness: 0.85,
-    metalness: 0.08,
+    color: 0x9a8768,
+    roughness: 0.88,
+    metalness: 0.06,
     flatShading: true,
   });
 
@@ -595,57 +582,19 @@ function createMats(scene, renderer) {
     const z = CONFIG.matZ[index];
     const teamIndex = CONFIG.matOwner[index];
     const team = TEAMS[teamIndex];
+    const base = matBaseHeight(index);
 
-    const group = new THREE.Group();
-    group.position.set(CONFIG.matX, 0, z);
-
-    // The dish itself, sunk into the hole cut in the court.
-    const dish = new THREE.Mesh(dishGeo, dishMat);
-    dish.receiveShadow = true;
-    dish.castShadow = true;
-    group.add(dish);
-
-    // Cap under the floor so the hollow is never see-through from a low angle.
-    const floor = new THREE.Mesh(floorGeo, floorMat);
-    floor.position.y = -D + 0.002;
-    floor.receiveShadow = true;
-    group.add(floor);
-
-    // Metal inlay on the rim: the team's colour, and the main state cue.
-    const inlay = new THREE.Mesh(
-      new THREE.TorusGeometry(R * 0.965, 0.026, 8, 44),
-      new THREE.MeshStandardMaterial({
-        color: team.color,
-        metalness: 0.72,
-        roughness: 0.34,
-        emissive: new THREE.Color(team.color),
-        emissiveIntensity: 0.18,
-      })
-    );
-    inlay.rotation.x = -Math.PI / 2;
-    inlay.position.y = 0.016;
-    inlay.castShadow = false;
-    group.add(inlay);
+    const dish = createMatDish(team, R, D);
+    dish.group.position.set(CONFIG.matX, base, z);
+    scene.add(dish.group);
 
     // Stone lid that appears when the mat is closed for the round.
     const cap = new THREE.Mesh(capGeo, capMat);
-    cap.position.y = -D + 0.028;
+    cap.position.y = -D + 0.035;
     cap.visible = false;
     cap.castShadow = true;
     cap.receiveShadow = true;
-    group.add(cap);
-
-    // Four clay studs around the rim, so the mat reads as built, not painted.
-    const studGeo = new THREE.SphereGeometry(0.036, 8, 6);
-    for (let s = 0; s < 4; s++) {
-      const angle = (s / 4) * Math.PI * 2 + Math.PI / 4;
-      const stud = new THREE.Mesh(studGeo, capMat);
-      stud.position.set(Math.cos(angle) * R * 1.13, 0.004, Math.sin(angle) * R * 1.13);
-      stud.castShadow = true;
-      group.add(stud);
-    }
-
-    scene.add(group);
+    dish.group.add(cap);
 
     // Number token beside the mat, billboarded towards the camera each frame so
     // it stays readable from any orbit angle.
@@ -655,14 +604,16 @@ function createMats(scene, renderer) {
       new THREE.PlaneGeometry(0.4, 0.4),
       new THREE.MeshBasicMaterial({ map: labelTex, transparent: true, depthWrite: false })
     );
-    label.position.set(CONFIG.matX + R + 0.66, 0.32, z);
+    label.position.set(CONFIG.matX + R + 0.72, base + 0.34, z);
     scene.add(label);
 
+    const inlayMat = dish.inlay.material;
     const mat = {
       index,
       teamIndex,
-      position: new THREE.Vector3(CONFIG.matX, 0, z),
-      group,
+      position: new THREE.Vector3(CONFIG.matX, base, z),
+      group: dish.group,
+      dish,
       label,
       state: 'open',
       /** open | occupied | closed */
@@ -672,11 +623,10 @@ function createMats(scene, renderer) {
         const closed = next === 'closed';
         const occupied = next === 'occupied';
         cap.visible = closed;
-        inlay.material.emissiveIntensity = closed ? 0.04 : occupied ? 0.62 : 0.18;
-        inlay.material.color.setHex(closed ? 0x8d7a5c : team.color);
-        inlay.material.metalness = closed ? 0.5 : 0.72;
-        label.material.opacity = closed ? 0.42 : 1;
+        inlayMat.emissiveIntensity = closed ? 0.05 : occupied ? 0.95 : 0.4;
+        inlayMat.color.setHex(closed ? 0x8d7a5c : team.color);
         label.material.transparent = true;
+        label.material.opacity = closed ? 0.42 : 1;
       },
     };
 
@@ -852,14 +802,10 @@ export function buildWorld(scene, renderer) {
   time('environment', () => createEnvironment(scene, renderer));
   const sun = time('lights', () => createLights(scene));
 
-  const plain = time('plain', () => createPlain(renderer));
-  scene.add(plain);
-
-  const court = time('court', () => createCourt(renderer));
-  scene.add(court);
-
-  const berms = time('berms', () => createBerms());
-  scene.add(berms);
+  // One continuous ground surface: fine swept court with real mat holes, coarse
+  // plain beyond it. See createGround().
+  const ground = time('ground', () => createGround(renderer));
+  scene.add(ground.group);
 
   const throwLine = time('throwLine', () => createThrowLine());
   scene.add(throwLine);
@@ -892,7 +838,7 @@ export function buildWorld(scene, renderer) {
   return {
     sun,
     mats,
-    ground: { court, plain, berms, throwLine },
+    ground,
     decorSteps,
     timings,
     update,
