@@ -393,15 +393,49 @@ try {
     const aimed = { x: g.aim.dir.x, z: g.aim.dir.z };
     const power = g.aim.power;
     fire('pointerup', 9, to);
+    const launchPhase = g.phase;
     const vel = g.thrownBall ? { x: g.thrownBall.body.vel.x, z: g.thrownBall.body.vel.z } : null;
     const speed = vel ? Math.hypot(vel.x, vel.z) : 0;
+
+    // Sample the follow while this goolah is still rolling. Sampling here is
+    // deliberate: the turn advances as soon as it settles, after which the
+    // target belongs to the next player's goolah back at the throw line.
+    const t0 = { x: g.camRig.target.x, z: g.camRig.target.z };
+    const c0 = { x: g.camera.position.x, z: g.camera.position.z };
+    const b0 = g.thrownBall ? { x: g.thrownBall.body.pos.x, z: g.thrownBall.body.pos.z } : null;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 25; i += 1) {
+      await wait(40);
+      if (!g.thrownBall || g.phase !== 'flying') break;
+      const p = g.thrownBall.body.pos;
+      if (b0 && Math.hypot(p.x - b0.x, p.z - b0.z) > 1.5) break;
+    }
+    const t1 = { x: g.camRig.target.x, z: g.camRig.target.z };
+    const c1 = { x: g.camera.position.x, z: g.camera.position.z };
+    const b1 = g.thrownBall ? { x: g.thrownBall.body.pos.x, z: g.thrownBall.body.pos.z } : b0;
+    const ballMove = b1 && b0 ? { x: b1.x - b0.x, z: b1.z - b0.z } : { x: 0, z: 0 };
+    const camMove = { x: t1.x - t0.x, z: t1.z - t0.z };
+    const ballLen = Math.hypot(ballMove.x, ballMove.z);
+    const camLen = Math.hypot(camMove.x, camMove.z);
+
     return {
-      phase: g.phase,
+      phase: launchPhase,
       power,
       aimed,
       vel,
       speed,
       alignment: vel && speed > 0 ? (vel.x * aimed.x + vel.z * aimed.z) / speed : 0,
+      follow: {
+        ballLen,
+        camLen,
+        camBody: Math.hypot(c1.x - c0.x, c1.z - c0.z),
+        dot:
+          ballLen > 0 && camLen > 0
+            ? (ballMove.x * camMove.x + ballMove.z * camMove.z) / (ballLen * camLen)
+            : 0,
+        t0,
+        t1,
+      },
     };
   });
   check('releasing the drag launches the goolah', thrown.phase === 'flying', `phase=${thrown.phase}`);
@@ -413,17 +447,23 @@ try {
   );
 
   /* ------------------------------------------- the camera follows play --- */
-  await page.waitForTimeout(500);
-  const during = await snapshot();
+  // The target orbits a point blended from the field centre and the goolah whose
+  // turn it is, which keeps the active goolah and the mats both in frame.
+  const expectedZ = 1.1 + (before.ball.z - 1.1) * 0.45;
   check(
-    'the camera target follows the thrown goolah',
-    during.target.z > before.target.z + 0.05,
-    `target z ${before.target.z.toFixed(2)} -> ${during.target.z.toFixed(2)}`
+    'the camera orbits between the field centre and the goolah in play',
+    Math.abs(before.target.z - expectedZ) < 0.2,
+    `target z ${before.target.z.toFixed(2)} vs expected ${expectedZ.toFixed(2)} for ball z ${before.ball.z.toFixed(2)}`
   );
   check(
-    'the camera itself moves with the goolah',
-    Math.hypot(during.cam.x - before.cam.x, during.cam.z - before.cam.z) > 0.1,
-    `camera moved ${Math.hypot(during.cam.x - before.cam.x, during.cam.z - before.cam.z).toFixed(3)}`
+    'the camera target follows the thrown goolah',
+    thrown.follow.ballLen > 0.8 && thrown.follow.camLen > 0.3 && thrown.follow.dot > 0.9,
+    JSON.stringify(thrown.follow)
+  );
+  check(
+    'the camera body moves with the goolah',
+    thrown.follow.camBody > 0.05,
+    `camera moved ${thrown.follow.camBody.toFixed(3)}`
   );
 
   check('no runtime console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
@@ -435,7 +475,7 @@ try {
         orbit: { yaw: orbited.yaw, pitch: raised.pitch, zoomOut: zoomedOut.dist, zoomIn: zoomedIn.dist },
         aim: { backward: back.angle, sideways: sideways.angle, arrowDelta: back.arrowMatches },
         throw: { power: thrown.power, alignment: thrown.alignment, speed: thrown.speed },
-        follow: { before: before.target, during: during.target },
+        follow: { ...thrown.follow, anchor: before.target, expectedZ },
         consoleErrors: consoleErrors.slice(0, 5),
       },
       null,
