@@ -160,8 +160,12 @@ export function matRelief(distance, R = CONFIG.matRadius, D = CONFIG.matDepth) {
 }
 
 /** Base ground height under a mat (the dish is modelled on top of this). */
+const _baseCache = [];
 export function matBaseHeight(index) {
-  return terrainHeight(CONFIG.matX, CONFIG.matZ[index]);
+  if (_baseCache[index] === undefined) {
+    _baseCache[index] = terrainHeight(CONFIG.matX, CONFIG.matZ[index]);
+  }
+  return _baseCache[index];
 }
 
 /**
@@ -173,7 +177,10 @@ export function surfaceHeight(x, z) {
   const R = CONFIG.matRadius;
   const outer = 1.22 * R;
   for (let i = 0; i < CONFIG.matZ.length; i += 1) {
-    const d = Math.hypot(x - CONFIG.matX, z - CONFIG.matZ[i]);
+    const dx = x - CONFIG.matX;
+    const dz = z - CONFIG.matZ[i];
+    if (Math.abs(dx) >= outer || Math.abs(dz) >= outer) continue;
+    const d = Math.hypot(dx, dz);
     if (d >= outer) continue;
     const baseAtMat = matBaseHeight(i);
     const relief = matRelief(d, R);

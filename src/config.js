@@ -46,26 +46,42 @@ export const CONFIG = {
   ballRadius: 0.28,
 
   /* ------------------------------------------------------------ physics ---- */
+  // Cast metal: 4.5 kg. Mass and the solid-sphere inertia are what make a
+  // collision transfer momentum instead of pushing like a light ball.
+  ballMass: 4.5,
   gravity: 20,
   airDrag: 0.06,
-  // Heavy metal on packed dirt: a low, dead bounce.
-  groundRestitution: 0.32,
-  bounceThreshold: 1.2,
-  // ...but a heavy ball keeps most of its speed coming off the ground.
-  bounceFriction: 0.88,
-  // Rolling resistance in m/s². Tuned by sweep (scripts/tune-throw.mjs) so a
-  // full-power throw carries ~1.4 m past mat 4 while the softest throw stops
-  // short of mat 1.
-  rollFriction: 12,
+  // Packed dirt takes almost all of a landing; the rest rebounds.
+  groundRestitution: 0.26,
+  // Below this normal speed a ground contact is a roll, not a bounce.
+  bounceThreshold: 1.1,
+  // How much forward speed an impact scrubs off.
+  impactFriction: 0.45,
+  // Rolling resistance in m/s²: the constant deceleration that finally stops a
+  // goolah. Tuned against scripts/test-phase1.mjs so full power carries ~1.4 m
+  // past mat 4 while the softest throw stops well short of mat 1.
+  rollFriction: 9,
+  // How fast a sliding goolah grips and starts to roll (1/s).
+  spinGrip: 18,
   // Steel against steel.
-  ballRestitution: 0.92,
+  ballRestitution: 0.9,
+  ballFriction: 0.3,
   sleepSpeed: 0.16,
+  // Swept collision: no goolah may travel further than this in one substep, so
+  // a fast ball can never tunnel through another one.
+  maxSubstepTravel: 0.09,
+  maxSubsteps: 60,
+  // Separation applied on contact (1 = fully de-overlapped).
+  contactCorrection: 1,
+  // Below this closing speed a touch is contact, not a strike: it cannot score.
+  minContactSpeed: 0.25,
 
   /* ------------------------------------------------------------- throws ---- */
-  minSpeed: 4.5,
-  maxSpeed: 17,
-  minLift: 1.3,
-  maxLift: 4.8,
+  minSpeed: 10.5,
+  maxSpeed: 17.5,
+  // A heavy ball is thrown low: it skims, lands and rolls rather than flying.
+  minLift: 0.4,
+  maxLift: 1.6,
   // The AI's own candidate cone (src/ai.js and its harness). Human aiming is
   // unrestricted: a player may throw in any horizontal direction.
   maxAimAngle: 0.35,
