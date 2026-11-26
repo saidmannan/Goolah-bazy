@@ -56,7 +56,7 @@ const who = (e) => `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`;
 {
   const e = new RulesEngine();
   const before = e.state.scores[1];
-  const r = shoot(e, { collisions: [opp(playerIndex0())], ownMatIndex: -1 });
+  const r = shoot(e, { collisions: [opp(0)], ownMatIndex: -1 });
 
   eq('1 first valid Tir scores exactly one point', r.points, RULES.tirPoints);
   eq('1 the point goes to the throwing team', e.state.scores[1], before + 1);
@@ -262,10 +262,6 @@ const who = (e) => `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`;
 }
 
 /* --------------------------------------------------------------- report -- */
-
-function playerIndex0() {
-  return 0;
-}
 
 if (failures.length) {
   console.error(`✗ ${failures.length} failing check(s) of ${passed + failures.length}`);
