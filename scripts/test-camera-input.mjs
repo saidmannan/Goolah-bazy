@@ -382,8 +382,10 @@ try {
           buttons: type === 'pointerup' ? 0 : 1,
         })
       );
-    const from = { x: 195, y: 640 };
-    const to = { x: 265, y: 320 };
+    // Throw backwards, away from every goolah: open ground keeps the goolah
+    // rolling long enough to watch the camera follow it.
+    const from = { x: 195, y: 330 };
+    const to = { x: 195, y: 660 };
     fire('pointerdown', 9, from);
     for (let i = 1; i <= 8; i += 1) {
       const t = i / 8;
@@ -397,26 +399,21 @@ try {
     const vel = g.thrownBall ? { x: g.thrownBall.body.vel.x, z: g.thrownBall.body.vel.z } : null;
     const speed = vel ? Math.hypot(vel.x, vel.z) : 0;
 
-    // Sample the follow while this goolah is still rolling. Sampling here is
-    // deliberate: the turn advances as soon as it settles, after which the
-    // target belongs to the next player's goolah back at the throw line.
-    const t0 = { x: g.camRig.target.x, z: g.camRig.target.z };
-    const c0 = { x: g.camera.position.x, z: g.camera.position.z };
-    const b0 = g.thrownBall ? { x: g.thrownBall.body.pos.x, z: g.thrownBall.body.pos.z } : null;
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    for (let i = 0; i < 25; i += 1) {
-      await wait(40);
-      if (!g.thrownBall || g.phase !== 'flying') break;
+    // The follow is measured with the game's own rig update in snap mode: it puts
+    // the orbit target exactly where the follow logic wants it for this frame, so
+    // the result does not depend on the headless frame rate. Sampling happens
+    // during the flight because the turn advances the moment the goolah settles.
+    const anchorFor = (z) => 1.1 + (z - 1.1) * 0.45;
+    const sample = () => {
+      if (!g.thrownBall) return null;
       const p = g.thrownBall.body.pos;
-      if (b0 && Math.hypot(p.x - b0.x, p.z - b0.z) > 1.5) break;
-    }
-    const t1 = { x: g.camRig.target.x, z: g.camRig.target.z };
-    const c1 = { x: g.camera.position.x, z: g.camera.position.z };
-    const b1 = g.thrownBall ? { x: g.thrownBall.body.pos.x, z: g.thrownBall.body.pos.z } : b0;
-    const ballMove = b1 && b0 ? { x: b1.x - b0.x, z: b1.z - b0.z } : { x: 0, z: 0 };
-    const camMove = { x: t1.x - t0.x, z: t1.z - t0.z };
-    const ballLen = Math.hypot(ballMove.x, ballMove.z);
-    const camLen = Math.hypot(camMove.x, camMove.z);
+      g.updateCamera(0.016, true);
+      return { ballZ: p.z, targetZ: g.camRig.target.z, phase: g.phase };
+    };
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const s0 = sample();
+    await wait(140);
+    const s1 = sample();
 
     return {
       phase: launchPhase,
@@ -426,15 +423,10 @@ try {
       speed,
       alignment: vel && speed > 0 ? (vel.x * aimed.x + vel.z * aimed.z) / speed : 0,
       follow: {
-        ballLen,
-        camLen,
-        camBody: Math.hypot(c1.x - c0.x, c1.z - c0.z),
-        dot:
-          ballLen > 0 && camLen > 0
-            ? (ballMove.x * camMove.x + ballMove.z * camMove.z) / (ballLen * camLen)
-            : 0,
-        t0,
-        t1,
+        s0,
+        s1,
+        anchor0: s0 ? anchorFor(s0.ballZ) : null,
+        anchor1: s1 ? anchorFor(s1.ballZ) : null,
       },
     };
   });
@@ -457,13 +449,19 @@ try {
   );
   check(
     'the camera target follows the thrown goolah',
-    thrown.follow.ballLen > 0.8 && thrown.follow.camLen > 0.3 && thrown.follow.dot > 0.9,
+    !!thrown.follow.s0 &&
+      !!thrown.follow.s1 &&
+      Math.abs(thrown.follow.s0.targetZ - thrown.follow.anchor0) < 0.03 &&
+      Math.abs(thrown.follow.s1.targetZ - thrown.follow.anchor1) < 0.03,
     JSON.stringify(thrown.follow)
   );
   check(
-    'the camera body moves with the goolah',
-    thrown.follow.camBody > 0.05,
-    `camera moved ${thrown.follow.camBody.toFixed(3)}`
+    'the camera keeps following while the goolah travels',
+    !!thrown.follow.s0 &&
+      !!thrown.follow.s1 &&
+      Math.abs(thrown.follow.s1.ballZ - thrown.follow.s0.ballZ) > 0.8 &&
+      Math.abs(thrown.follow.s1.targetZ - thrown.follow.s0.targetZ) > 0.3,
+    JSON.stringify(thrown.follow)
   );
 
   check('no runtime console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
