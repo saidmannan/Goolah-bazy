@@ -1,7 +1,7 @@
 // AI opponent for Goolah Bazy (Phase 3).
 //
 // The AI is a player, not an authority. It produces exactly the inputs a human
-// produces — an aim angle inside CONFIG.maxAimAngle, a power in 0..1, and the two
+// produces — a horizontal aim angle, a power in 0..1, and the two
 // rule choices a human is offered (Mat-per, final-mat target) — and then goes
 // through the same throwBall() -> physics -> rules.resolveThrow() path. It never
 // writes scores, mats or turn state, so an illegal move is not representable:
@@ -22,6 +22,13 @@ import { CONFIG, isPlayablePoint } from './config.js';
 import { ballKey } from './rules.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Normalise an angle to (-PI, PI]. Full-direction aiming needs this: clamping
+ * a shot back into a forward cone is what made the AI miss its intended target. */
+const wrapAngle = (a) => {
+  const turn = Math.PI * 2;
+  return (((a + Math.PI) % turn) + turn) % turn - Math.PI;
+};
 
 export const DIFFICULTIES = {
   beginner: {
@@ -263,15 +270,16 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     const dx = candidate.x - shooter.x;
     const dz = candidate.z - shooter.z;
     const dist = Math.hypot(dx, dz);
-    const raw = Math.atan2(dx, dz);
-    const angle = clamp(raw, -cfg.maxAimAngle, cfg.maxAimAngle);
-    // How far off the straight line the target ends up once the angle is capped.
-    const lateral = Math.abs(Math.sin(raw - angle)) * dist;
-    const along = dx * Math.sin(angle) + dz * Math.cos(angle);
+    // Full-direction aiming. The player can now throw anywhere horizontally, so
+    // the AI aims straight at its target instead of into a forward cone; a
+    // capped angle used to leave the shot off-line and unable to touch it.
+    const angle = Math.atan2(dx, dz);
+    const along = dist;
     // A Tir needs to still be rolling on contact; a Mat needs to stop in it.
     const overshoot = candidate.type === 'mat' ? 0 : 0.75;
     const power = clamp(powerForDistance(along + overshoot, cfg), 0.08, 1);
-    return { angle, power, along, lateral, reachable: lateral <= 0.45 };
+    const maxRange = distanceForPower(1, cfg);
+    return { angle, power, along, lateral: 0, reachable: along <= maxRange + 0.5 };
   }
 
   /** Roll a candidate throw out with the game's own integrator. */
@@ -552,22 +560,32 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
   function solveMatPower(shooter, candidate, aim, balls, cfg) {
     const lands = (power) => predict(shooter, aim.angle, power, balls, cfg).selfMat === candidate.matIndex;
     if (lands(aim.power)) return aim;
-    const steps = profile.picks > 1 ? 12 : 26;
-    let best = null;
-    let bestError = Infinity;
-    for (let i = 0; i <= steps; i += 1) {
-      const power = 0.08 + (1 - 0.08) * (i / steps);
-      const prediction = predict(shooter, aim.angle, power, balls, cfg);
-      if (prediction.selfMat !== candidate.matIndex) continue;
-      const dx = prediction.rest.x - candidate.x;
-      const dz = prediction.rest.z - candidate.z;
-      const error = dx * dx + dz * dz;
-      if (error < bestError) {
-        bestError = error;
-        best = power;
+
+    // A dish only accepts a few hundredths of a power unit, which a fixed grid
+    // steps straight over: that is why mat attempts almost never converted.
+    // The stopping distance grows monotonically with power, so bisect on the
+    // signed along-track landing error and land in the middle of the dish.
+    const dir = { x: Math.sin(aim.angle), y: 0, z: Math.cos(aim.angle) };
+    const alongOf = (rest) => (rest.x - shooter.x) * dir.x + (rest.z - shooter.z) * dir.z;
+    const target = (candidate.x - shooter.x) * dir.x + (candidate.z - shooter.z) * dir.z;
+    const error = (power) => alongOf(predict(shooter, aim.angle, power, balls, cfg).rest) - target;
+
+    let lo = 0.02;
+    let hi = 1;
+    let best = aim.power;
+    let bestError = Math.abs(error(aim.power));
+    for (let i = 0; i < 16; i += 1) {
+      const mid = (lo + hi) / 2;
+      const e = error(mid);
+      if (Math.abs(e) < bestError) {
+        bestError = Math.abs(e);
+        best = mid;
       }
+      if (e > 0) hi = mid;
+      else lo = mid;
     }
-    return best === null ? aim : { ...aim, power: best };
+    const solved = { ...aim, power: best };
+    return lands(best) ? solved : aim;
   }
 
   function chooseThrow(engine, balls, cfg = CONFIG) {
@@ -614,7 +632,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       const power = clamp(Math.min(fallback.aim.power, 0.22), 0.06, 1);
       return {
         type: 'throw',
-        angle: clamp(fallback.aim.angle, -cfg.maxAimAngle, cfg.maxAimAngle),
+        angle: fallback.aim.angle,
         power,
         intended: {
           kind: 'nudge',
@@ -637,11 +655,11 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     // shot will use, not a hand-tuned hit percentage.
     if (profile.refuseFutile) {
       const best = pool[0];
+      // The power is solved after the pick, so a prediction that merely lands
+      // short of the dish does not make the mat futile; an obstructed line does.
       const futileMat = best.candidate.type === 'mat'
         && (best.candidate.blocked
-          || (best.prediction
-            && (best.prediction.selfMat !== best.candidate.matIndex
-              || best.prediction.contacts.length > 0)));
+          || Boolean(best.prediction && best.prediction.contacts.length > 0));
       if (futileMat) {
         const tir = reachable.find((entry) => entry.candidate.type === 'tir');
         if (tir) pool.splice(0, pool.length, tir);
@@ -656,7 +674,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         : pick.aim;
 
     // Execution error: this is what separates the three levels.
-    const angle = clamp(aim.angle + gauss() * profile.aimSigma, -cfg.maxAimAngle, cfg.maxAimAngle);
+    const angle = wrapAngle(aim.angle + gauss() * profile.aimSigma);
     const power = clamp(aim.power + gauss() * profile.powerSigma, 0.06, 1);
 
     return {
