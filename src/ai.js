@@ -19,6 +19,7 @@
 // here as a claim.
 import { simulateShot } from './physics.js';
 import { CONFIG, isPlayablePoint } from './config.js';
+import { surfaceHeight } from './terrain.js';
 import { ballKey } from './rules.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
