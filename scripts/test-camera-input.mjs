@@ -69,7 +69,9 @@ try {
   page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
   await page.goto(`${BASE}/?debug=1`, { waitUntil: 'load' });
-  await page.waitForSelector('#loader.hidden', { timeout: 30000 });
+  // The loader keeps its #loader element and only gains the hidden class, so it
+  // must be waited on as attached, never as visible.
+  await page.waitForSelector('#loader.hidden', { state: 'attached', timeout: 30000 });
   await page.waitForFunction(() => !!window.__gb?.game?.state, undefined, { timeout: 30000 });
   await page.click('#playBtn');
 
