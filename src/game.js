@@ -73,11 +73,16 @@ export class Game {
     this.autoTimer = 0;
 
     this.aim = { dir: new THREE.Vector3(0, 0, 1), power: 0, angle: 0 };
+    // The single finger that owns the aim in progress, or null.
     this.pointer = null;
-    // Every finger on the field right now. One finger aims; two or more orbit
-    // and zoom the camera, so a camera gesture can never become a throw.
+    // Every pointer down anywhere on the page right now, keyed by pointerId.
+    // One finger aims; two or more orbit and zoom the camera.
     this.pointers = new Map();
     this.camGesture = null;
+    // Set the moment a second finger touches the page, and cleared only once the
+    // last finger lifts. While it is set the gesture can never aim or throw,
+    // even after the extra fingers are gone.
+    this.gestureMulti = false;
     // Free orbit rig around the goolah in play. yaw is the horizontal direction
     // the camera looks in (0 = straight down the line of mats), pitch is its
     // elevation above the ground and dist the radius it orbits at.
@@ -94,6 +99,7 @@ export class Game {
     this._onMove = this._onMove.bind(this);
     this._onUp = this._onUp.bind(this);
     this._onCancel = this._onCancel.bind(this);
+    this._onBlur = this._onBlur.bind(this);
     this._onWheel = this._onWheel.bind(this);
   }
 
@@ -106,13 +112,21 @@ export class Game {
     this.bindUI();
 
     const canvas = this.renderer.domElement;
-    canvas.addEventListener('pointerdown', this._onDown);
-    canvas.addEventListener('pointermove', this._onMove);
-    canvas.addEventListener('pointerup', this._onUp);
-    canvas.addEventListener('pointercancel', this._onCancel);
-    // No pointerleave handler on purpose: with pointer capture a finger sliding
-    // off the canvas still reports pointerup, while a leave event can fire
-    // mid-drag on iOS and would silently cancel a valid aim.
+    // Pointer Events are the only input path: no touchstart/touchend handler
+    // runs game logic, so iOS Safari cannot read the same finger twice.
+    // They are bound to the window rather than to the canvas because a finger
+    // that lands beside the field is still a finger — it has to count towards
+    // the gesture. Otherwise a two-finger camera move that starts half on the
+    // HUD looks like a one-finger aim, and lifting it throws the goolah.
+    window.addEventListener('pointerdown', this._onDown, { passive: true });
+    window.addEventListener('pointermove', this._onMove, { passive: true });
+    window.addEventListener('pointerup', this._onUp, { passive: true });
+    window.addEventListener('pointercancel', this._onCancel, { passive: true });
+    // iOS drops pointerup when the app loses focus, so clear the tracking on
+    // blur: a stale id must never wedge the next gesture.
+    window.addEventListener('blur', this._onBlur, { passive: true });
+    // No pointerleave handler on purpose: a leave event can fire mid-drag on
+    // iOS and would silently cancel a valid aim.
     // Trackpad and mouse wheel zoom the orbit on desktop.
     canvas.addEventListener('wheel', this._onWheel, { passive: false });
 
@@ -721,22 +735,40 @@ export class Game {
 
   /* --------------------------------------------------------------- input --- */
 
+  /** True when a pointer landed on the 3D field rather than on the HUD. */
+  isFieldTarget(target) {
+    const canvas = this.renderer.domElement;
+    return target === canvas || (Boolean(target) && canvas.contains(target));
+  }
+
   /**
-   * One finger aims; two or more fingers move the camera. The two never mix: as
-   * soon as a second finger lands the aim in progress is dropped without a
-   * throw, and the gesture belongs to the orbit rig until the fingers lift.
+   * One finger aims and throws. Two or more fingers orbit and zoom. The two
+   * never mix: the moment a second finger lands the aim in progress is dropped
+   * without a throw and the whole gesture is marked multi-touch. That mark
+   * survives until the last finger lifts, so no pointer-up belonging to the
+   * gesture can throw — not the aiming finger's, not the camera finger's, and
+   * not the last one to leave the screen.
    */
   _onDown(event) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
-    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const onCanvas = this.isFieldTarget(event.target);
+    this.pointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      onCanvas,
+    });
 
-    if (this.pointers.size >= 2) {
+    // A second finger anywhere on the page turns this into a camera gesture and
+    // poisons it for good.
+    if (this.pointers.size > 1) {
+      this.gestureMulti = true;
       this._cancelAim();
       this._beginCameraGesture();
       return;
     }
 
-    if (!this.canAim()) return;
+    // Only a fresh, single-finger press on the field may start an aim.
+    if (!onCanvas || !this.canAim()) return;
     this.pointer = {
       id: event.pointerId,
       startX: event.clientX,
@@ -752,11 +784,6 @@ export class Game {
     this.aimGroup.visible = true;
     this.dots.visible = true;
     this.updateAimVisuals();
-    try {
-      this.renderer.domElement.setPointerCapture(event.pointerId);
-    } catch (err) {
-      /* pointer capture is optional */
-    }
   }
 
   _onMove(event) {
@@ -765,11 +792,15 @@ export class Game {
     tracked.x = event.clientX;
     tracked.y = event.clientY;
 
-    // Two fingers: orbit and pinch-zoom. Never aim, never throw.
-    if (this.pointers.size >= 2) {
+    // Two or more fingers: orbit and pinch-zoom. Never aim, never throw.
+    if (this.pointers.size > 1) {
+      this.gestureMulti = true;
       this._updateCameraGesture();
       return;
     }
+    // A gesture that ever had a second finger can never aim, even now that only
+    // one finger is left down.
+    if (this.gestureMulti) return;
     if (!this.pointer || event.pointerId !== this.pointer.id) return;
 
     const dx = event.clientX - this.pointer.startX;
@@ -801,16 +832,26 @@ export class Game {
   _onUp(event) {
     this.pointers.delete(event.pointerId);
 
+    const wasMulti = this.gestureMulti;
+    const isAimPointer = Boolean(this.pointer) && event.pointerId === this.pointer.id;
+
     // Lifting one of two fingers ends the camera gesture, not the turn.
     if (this.camGesture) {
-      if (this.pointers.size >= 2) this._beginCameraGesture();
+      if (this.pointers.size > 1) this._beginCameraGesture();
       else this.camGesture = null;
+    }
+    // The last finger is up: this gesture is over, and only a fresh one may aim.
+    if (this.pointers.size === 0) this.gestureMulti = false;
+
+    // A throw needs the aiming pointer itself, a gesture that never went
+    // multi-touch, and no other finger still down. Every other pointer-up —
+    // including the aiming finger's when a camera finger came and went — is
+    // swallowed here, so it can never launch a goolah.
+    if (!isAimPointer || wasMulti || this.pointers.size > 0) {
+      if (isAimPointer) this._cancelAim();
       return;
     }
 
-    if (!this.pointer || (event.pointerId !== undefined && event.pointerId !== this.pointer.id)) {
-      return;
-    }
     const power = this.aim.power;
     const moved = this.pointer.moved;
     this.pointer = null;
@@ -822,33 +863,30 @@ export class Game {
         this._resetAimState();
       }
     }
-    try {
-      this.renderer.domElement.releasePointerCapture(event.pointerId);
-    } catch (err) {
-      /* ignore */
-    }
   }
 
-  /** The canvas lost the pointer or the browser cancelled it: drop the aim. */
+  /** The browser cancelled a pointer (system gesture, app switch): drop the aim. */
   _onCancel(event) {
     this.pointers.delete(event.pointerId);
     if (this.camGesture) {
-      if (this.pointers.size >= 2) this._beginCameraGesture();
+      if (this.pointers.size > 1) this._beginCameraGesture();
       else this.camGesture = null;
-      return;
     }
+    if (this.pointers.size === 0) this.gestureMulti = false;
     this._cancelAim();
   }
 
+  /** The page lost focus, so any pointerup still owed to us will never arrive. */
+  _onBlur() {
+    this.pointers.clear();
+    this.gestureMulti = false;
+    this.camGesture = null;
+    this._cancelAim();
+  }
+
+  /** Abandon the aim in progress: no throw, no leftover helpers. */
   _cancelAim() {
-    if (this.pointer) {
-      try {
-        this.renderer.domElement.releasePointerCapture(this.pointer.id);
-      } catch (err) {
-        /* ignore */
-      }
-      this.pointer = null;
-    }
+    this.pointer = null;
     this._resetAimState();
   }
 
@@ -866,9 +904,18 @@ export class Game {
 
   /* ------------------------------------------------------ camera gestures --- */
 
+  /** The fingers that landed on the field itself are the ones that orbit. */
+  fieldPointers() {
+    const points = [];
+    for (const pointer of this.pointers.values()) {
+      if (pointer.onCanvas) points.push(pointer);
+    }
+    return points;
+  }
+
   /** Remember the fingers and the rig when a two-finger gesture starts. */
   _beginCameraGesture() {
-    const points = [...this.pointers.values()];
+    const points = this.fieldPointers();
     if (points.length < 2) {
       this.camGesture = null;
       return;
@@ -889,7 +936,7 @@ export class Game {
       this._beginCameraGesture();
       return;
     }
-    const points = [...this.pointers.values()];
+    const points = this.fieldPointers();
     if (points.length < 2) return;
     const [a, b] = points;
     const cx = (a.x + b.x) / 2;
@@ -897,9 +944,16 @@ export class Game {
     const spread = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
     const cfg = CONFIG.camera;
 
-    // Horizontal drag spins the camera all the way around the field.
-    this.camRig.yaw = this.camGesture.yaw + (cx - this.camGesture.cx) * cfg.orbitSpeed;
-    // Vertical drag changes the viewing height, between the rig's limits.
+    // Both axes move the view the way the fingers move, always measured from
+    // this gesture's own starting point, so the mapping is identical from every
+    // viewing angle:
+    //   * dragging right turns the camera to the right. yaw is the horizontal
+    //     direction the camera looks in, and turning right means turning away
+    //     from +X while the rig sits at yaw 0, so yaw falls as the drag grows.
+    //   * dragging up tilts the view up, which lowers the camera towards the
+    //     field; dragging down lifts it for a top-down view.
+    // Horizontal drag moves only yaw and vertical drag only pitch.
+    this.camRig.yaw = this.camGesture.yaw - (cx - this.camGesture.cx) * cfg.orbitSpeed;
     this.camRig.pitch = clamp(
       this.camGesture.pitch + (cy - this.camGesture.cy) * cfg.pitchSpeed,
       cfg.minPitch,

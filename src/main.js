@@ -98,13 +98,19 @@ resize();
 
 // Prevent iOS double-tap zoom / rubber-band scrolling over the field.
 document.addEventListener('gesturestart', (event) => event.preventDefault());
-document.addEventListener(
-  'touchmove',
-  (event) => {
-    if (event.touches.length > 1) event.preventDefault();
-  },
-  { passive: false }
-);
+// Keep Safari's own pinch-zoom from claiming a two-finger gesture and cancelling
+// the pointers mid-orbit. This only suppresses a browser default: every game
+// input is read from the Pointer Events in game.js, never from touch events, so
+// one finger can never be interpreted twice.
+for (const type of ['touchstart', 'touchmove']) {
+  document.addEventListener(
+    type,
+    (event) => {
+      if (event.touches.length > 1) event.preventDefault();
+    },
+    { passive: false }
+  );
+}
 
 let firstFrame = true;
 let lastFrameTime = 0;
