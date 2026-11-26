@@ -89,7 +89,7 @@ export const CONFIG = {
     maxDist: 32,
     orbitSpeed: 0.008, // radians per pixel of two-finger drag
     pitchSpeed: 0.005, // radians per pixel of two-finger vertical drag
-    zoomSpeed: 0.006, // log-distance per pixel of pinch
+    zoomExp: 1.6, // pinch exponent: fingers apart zoom in, together zoom out
     wheelSpeed: 0.0012,
     follow: 5, // how fast the orbit target chases the goolah in play
     settle: 9, // how fast the camera itself reaches the rig position

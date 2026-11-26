@@ -93,7 +93,7 @@ try {
     page.evaluate(() => {
       const g = window.__gb.game;
       return {
-        turnSeq: g.turnSeq,
+        ball: { x: g.activeBall.body.pos.x, z: g.activeBall.body.pos.z },
         phase: g.phase,
         scores: g.rules.state.scores.slice(),
         target: { x: g.camRig.target.x, z: g.camRig.target.z },
@@ -146,7 +146,7 @@ try {
           pitch: g.camRig.pitch,
           dist: g.camRig.dist,
           phase: g.phase,
-          turnSeq: g.turnSeq,
+          ball: { x: g.activeBall.body.pos.x, z: g.activeBall.body.pos.z },
           scores: g.rules.state.scores.slice(),
           pointers: g.pointers.size,
         };
@@ -167,7 +167,11 @@ try {
     `yaw ${limits.yaw} -> ${orbited.yaw}`
   );
   check('camera rotation does not throw', orbited.phase === 'ready', `phase=${orbited.phase}`);
-  check('camera rotation does not change the turn', orbited.turnSeq === before.turnSeq, `${before.turnSeq} -> ${orbited.turnSeq}`);
+  check(
+    'camera gestures move no goolah',
+    Math.hypot(orbited.ball.x - before.ball.x, orbited.ball.z - before.ball.z) < 1e-6,
+    `${JSON.stringify(before.ball)} -> ${JSON.stringify(orbited.ball)}`
+  );
   check(
     'camera rotation does not score',
     orbited.scores.join(',') === before.scores.join(','),
@@ -182,22 +186,23 @@ try {
     `pitch ${orbited.pitch} -> ${raised.pitch}`
   );
 
-  // Pinching out zooms out; pinching in zooms in; both stay within the limits.
-  const zoomedOut = await gesture({ x: 180, y: 500 }, { x: 220, y: 500 }, { x: 60, y: 500 }, { x: 340, y: 500 });
+  // Spreading two fingers apart (pinch out) pulls the camera in; pinching them
+  // together pushes it out. Both stay inside the rig's limits.
+  const zoomedIn = await gesture({ x: 180, y: 500 }, { x: 220, y: 500 }, { x: 60, y: 500 }, { x: 340, y: 500 });
   check(
-    'pinching out zooms the camera away',
-    zoomedOut.dist > raised.dist + 0.5,
-    `dist ${raised.dist} -> ${zoomedOut.dist}`
-  );
-  check('zoom stays within the far limit', zoomedOut.dist <= 32 + 1e-6, `dist=${zoomedOut.dist}`);
-
-  const zoomedIn = await gesture({ x: 60, y: 500 }, { x: 340, y: 500 }, { x: 180, y: 500 }, { x: 220, y: 500 });
-  check(
-    'pinching in zooms the camera closer',
-    zoomedIn.dist < zoomedOut.dist - 0.5,
-    `dist ${zoomedOut.dist} -> ${zoomedIn.dist}`
+    'pinching out zooms the camera closer',
+    zoomedIn.dist < raised.dist - 0.5,
+    `dist ${raised.dist} -> ${zoomedIn.dist}`
   );
   check('zoom stays within the near limit', zoomedIn.dist >= 7.5 - 1e-6, `dist=${zoomedIn.dist}`);
+
+  const zoomedOut = await gesture({ x: 60, y: 500 }, { x: 340, y: 500 }, { x: 180, y: 500 }, { x: 220, y: 500 });
+  check(
+    'pinching in zooms the camera away',
+    zoomedOut.dist > zoomedIn.dist + 0.5,
+    `dist ${zoomedIn.dist} -> ${zoomedOut.dist}`
+  );
+  check('zoom stays within the far limit', zoomedOut.dist <= 32 + 1e-6, `dist=${zoomedOut.dist}`);
 
   // Extreme vertical drags must not put the camera under the ground.
   const flat = await gesture({ x: 150, y: 200 }, { x: 240, y: 200 }, { x: 150, y: 2000 }, { x: 240, y: 2000 });
@@ -254,7 +259,6 @@ try {
           dotsVisible: g.dots.visible,
           preview: g.lastPreview ? { x: g.lastPreview.rest.x, z: g.lastPreview.rest.z } : null,
           ball: { x: ball.x, z: ball.z },
-          maxAim: g.rules && 0.35,
         };
       },
       { from, to }
@@ -275,10 +279,16 @@ try {
     `angle=${back.angle.toFixed(3)} rad`
   );
   check('the aim arrow points where the throw will go', back.arrowMatches < 1e-6, `delta=${back.arrowMatches}`);
+  const previewVec = back.preview
+    ? { x: back.preview.x - back.ball.x, z: back.preview.z - back.ball.z }
+    : { x: 0, z: 0 };
+  const previewLen = Math.hypot(previewVec.x, previewVec.z);
+  const previewDot =
+    previewLen > 0 ? (previewVec.x * back.dir.x + previewVec.z * back.dir.z) / previewLen : 0;
   check(
     'the trajectory preview runs in the aimed direction',
-    back.preview && (back.preview.z - back.ball.z) * back.dir.z >= 0 && Math.hypot(back.preview.x - back.ball.x, back.preview.z - back.ball.z) > 0.2,
-    JSON.stringify(back.preview)
+    previewLen > 0.2 && previewDot > 0.5,
+    `len=${previewLen.toFixed(2)} dot=${previewDot.toFixed(3)} rest=${JSON.stringify(back.preview)}`
   );
 
   // A second finger must cancel this aim without throwing.
@@ -304,7 +314,7 @@ try {
     fire('pointerup', 8, { x: 260, y: 500 });
     return {
       during,
-      after: { phase: g.phase, turnSeq: g.turnSeq, scores: g.rules.state.scores.slice() },
+      after: { phase: g.phase, ball: { x: g.activeBall.body.pos.x, z: g.activeBall.body.pos.z }, scores: g.rules.state.scores.slice() },
     };
   });
   check(
@@ -314,7 +324,8 @@ try {
   );
   check(
     'camera gestures never fire a throw',
-    cancelled.after.phase === 'ready' && cancelled.after.turnSeq === before.turnSeq,
+    cancelled.after.phase === 'ready' &&
+      Math.hypot(cancelled.after.ball.x - before.ball.x, cancelled.after.ball.z - before.ball.z) < 1e-6,
     JSON.stringify(cancelled.after)
   );
 
@@ -325,12 +336,33 @@ try {
     Math.abs(sideways.angle) > 1.2 && Math.abs(sideways.dotAxis) < 0.2,
     `angle=${sideways.angle.toFixed(3)} dot=${sideways.dotAxis.toFixed(3)}`
   );
-  await page.evaluate(() => {
+  // Cancel it with a second finger: releasing here would spend the human turn.
+  const sidewaysCancelled = await page.evaluate(() => {
     const canvas = document.getElementById('scene');
-    canvas.dispatchEvent(
-      new PointerEvent('pointerup', { pointerId: 7, pointerType: 'touch', clientX: 500, clientY: 500, bubbles: true, button: 0, buttons: 0 })
-    );
+    const fire = (type, id, p) =>
+      canvas.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: id,
+          pointerType: 'touch',
+          clientX: p.x,
+          clientY: p.y,
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: type === 'pointerup' ? 0 : 1,
+        })
+      );
+    fire('pointerdown', 8, { x: 260, y: 500 });
+    const g = window.__gb.game;
+    fire('pointerup', 7, { x: 500, y: 500 });
+    fire('pointerup', 8, { x: 260, y: 500 });
+    return { phase: g.phase, pointers: g.pointers.size };
   });
+  check(
+    'a sideways aim can be cancelled without throwing',
+    sidewaysCancelled.phase === 'ready' && sidewaysCancelled.pointers === 0,
+    JSON.stringify(sidewaysCancelled)
+  );
 
   /* ------------------------------- the real throw matches the preview --- */
   const thrown = await page.evaluate(() => {
