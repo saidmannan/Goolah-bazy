@@ -112,24 +112,12 @@ function makeGauss(rng) {
 /* --------------------------------------------------------------- physics --- */
 
 /**
- * Ground height with the four 5 cm mat dishes, identical to the field the game
- * renders (game.surfaceHeightAt). Kept here so the AI can predict a shot without
- * touching the scene graph.
+ * The surface the game actually simulates on. terrain.js owns the ground shape
+ * (natural relief plus the four dish profiles), so the AI predicts a shot on the
+ * very same surface the ball will roll over.
  */
-export function matSurface(cfg = CONFIG) {
-  return (x, z) => {
-    let height = 0;
-    for (let i = 0; i < cfg.matZ.length; i += 1) {
-      const dx = x - cfg.matX;
-      const dz = z - cfg.matZ[i];
-      const distance = Math.hypot(dx, dz);
-      if (distance >= cfg.matRadius) continue;
-      const t = 1 - distance / cfg.matRadius;
-      const dip = -cfg.matDepth * (t * t * (3 - 2 * t));
-      if (dip < height) height = dip;
-    }
-    return height;
-  };
+export function matSurface() {
+  return surfaceHeight;
 }
 
 const rangeCache = new Map();
