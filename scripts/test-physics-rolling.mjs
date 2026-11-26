@@ -68,9 +68,13 @@ const seat = (x, z, surface = surfaceHeight) =>
 
   // Rolling, not sliding: on a flat surface the angular speed must converge to
   // v / R with the spin axis square to the direction of travel.
+  // Sampled at 0.3 s: a 6 m/s goolah is still rolling at ~3.3 m/s (rolling
+  // resistance of 9 m/s² stops it after 0.67 s), so the constraint is measured
+  // while it is genuinely rolling rather than after it has come to rest.
+  const ROLL_STEPS = 72;
   const body = createBody(0, R + 0.0005, 0, R, CONFIG);
   body.vel.set(0, 0, 6);
-  for (let i = 0; i < 240; i += 1) stepBallMotion(body, 1 / 240, CONFIG, flat);
+  for (let i = 0; i < ROLL_STEPS; i += 1) stepBallMotion(body, 1 / 240, CONFIG, flat);
 
   const speed = Math.hypot(body.vel.x, body.vel.z);
   const spin = body.angVel.length();
@@ -88,7 +92,7 @@ const seat = (x, z, surface = surfaceHeight) =>
   // rolls must produce the same quaternion.
   const twin = createBody(0, R + 0.0005, 0, R, CONFIG);
   twin.vel.set(0, 0, 6);
-  for (let i = 0; i < 240; i += 1) stepBallMotion(twin, 1 / 240, CONFIG, flat);
+  for (let i = 0; i < ROLL_STEPS; i += 1) stepBallMotion(twin, 1 / 240, CONFIG, flat);
   near(twin.quat.angleTo(body.quat), 0, 1e-9, 'orientation is deterministic from the dynamics');
 }
 
@@ -266,13 +270,15 @@ function runStrike({ gap = 2.2, speed = 9, lateral = 0, frames = 240 } = {}) {
 
   // The contact point lies on the surface of the striker, on the line between
   // the two centres: it is a genuine touching point, not a proximity test.
-  const centreGap = c.a.pos.distanceTo(c.b.pos);
+  // Judged at the recorded moment of impact: the goolahs have rolled on since,
+  // so their live positions say nothing about the contact.
+  const centreGap = c.aPos.distanceTo(c.bPos);
   ok(
     Math.abs(centreGap - 2 * R) < 0.06,
     'contact happens at the moment the surfaces touch',
     `centres ${centreGap.toFixed(4)} apart, 2R=${(2 * R).toFixed(4)}`
   );
-  const toPoint = c.point.distanceTo(c.a.pos);
+  const toPoint = c.point.distanceTo(c.aPos);
   near(toPoint, R, 0.05, 'contact point sits on the goolah surface');
 
   // Duplicate contacts cannot accumulate: many substeps in one frame still give
@@ -368,7 +374,9 @@ function runStrike({ gap = 2.2, speed = 9, lateral = 0, frames = 240 } = {}) {
   // Find a power that actually drops it in — the field is uneven, so the solver
   // searches rather than assuming.
   let landed = null;
-  for (let power = 0.3; power <= 0.85; power += 0.01) {
+  // The whole legal power range: a gentle throw is the way a goolah is dropped
+  // into a near dish, so the sweep must reach the soft end of the range.
+  for (let power = 0; power <= 1; power += 0.005) {
     const shot = simulateShot(start, dir, power, CONFIG, {
       step: 1 / 240,
       maxTime: 18,
