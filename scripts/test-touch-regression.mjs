@@ -448,7 +448,7 @@ try {
     await down(1, 195, 500);
     await move(1, 195, 430);
     await move(1, 195, 380);
-    await synthetic('pointerdown', 91, 20, 40, '#hud');
+    await synthetic('pointerdown', 91, 20, 40, '.hud');
     const cancelled = await snap();
     check(
       'a second finger beside the field cancels the aim',
@@ -456,7 +456,7 @@ try {
       `phase=${cancelled.phase}, multi=${cancelled.multi}`
     );
     await up(1);
-    await synthetic('pointerup', 91, 20, 40, '#hud');
+    await synthetic('pointerup', 91, 20, 40, '.hud');
     const end = await noLeaks('second finger beside the field');
     check(
       'a gesture that touched the HUD never throws',
