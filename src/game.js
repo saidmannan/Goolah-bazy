@@ -559,6 +559,24 @@ export class Game {
       finalOpportunity: s.turn.finalOpportunity,
       matPerHeld: Boolean(s.matPer[s.turn.teamIndex][s.turn.playerIndex]),
     });
+    this.syncMatStates();
+  }
+
+  /**
+   * Push each mat's state onto the field itself, so the dish shows whether it is
+   * still open, holding a goolah, or closed for the round without the player
+   * having to read the HUD.
+   */
+  syncMatStates() {
+    const s = this.rules.state;
+    for (const mat of this.mats) {
+      if (!mat || typeof mat.setState !== 'function') continue;
+      const occupied = this.balls.some(
+        (ball) => ball.state === 'mat' && ball.matIndex === mat.index
+      );
+      const completed = Boolean(s.mats[mat.index] && s.mats[mat.index].completed);
+      mat.setState(completed ? 'closed' : occupied ? 'occupied' : 'open');
+    }
   }
 
   endRound() {
