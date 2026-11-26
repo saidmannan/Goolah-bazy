@@ -91,13 +91,19 @@ const who = (e) => `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`;
   // player cannot farm one goolah indefinitely.
   eq('3 the turn passes to the next player', who(e), '1:1');
 
-  // And a third hit by that player is still worth nothing (fresh engine, so we
-  // reach them through a mat-free sequence).
+  // The same player's sequence cannot pay twice; once the turn passes to the
+  // next player, that player's own sequence starts fresh.
   const e2 = new RulesEngine();
   shoot(e2, { collisions: [opp(0)], ownMatIndex: -1 });
   shoot(e2, { collisions: [opp(0)], ownMatIndex: -1 });
-  shoot(e2, { collisions: [opp(0)], ownMatIndex: -1 });
-  eq('2 three hits in one sequence still pay one point', e2.state.scores[1], 1);
+  eq('2 the repeat ended that player\'s sequence', who(e2), '1:1');
+  eq('2 one point from that player', e2.state.scores[1], 1);
+  eq(
+    '2 the next player has an independent sequence',
+    shoot(e2, { collisions: [opp(0)], ownMatIndex: -1 }).points,
+    1
+  );
+  eq('2 two points in total, one each', e2.state.scores[1], 2);
 }
 
 /* -------------------------------------------------------------------------
@@ -177,9 +183,10 @@ const who = (e) => `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`;
   const cap = e.resolveThrow({ collisions: [], ownMatIndex: 0 });
   eq('6 the mat is captured', cap.captures.length, 1);
   check('6 Mat-per is offered', cap.matPerOffers.length === 1);
-  eq('6 the player accepts Mat-per', e.chooseMatPer(true), true);
+  // chooseMatPer(true) records the hold and ends the turn itself.
+  const held = e.chooseMatPer(true);
+  eq('6 the player accepts Mat-per', held?.held, true);
   check('6 Mat-per status is recorded', Boolean(e.state.matPer[0][0]));
-  e.afterThrow(cap);
 
   // Play on until the opposing team is on the line.
   let guard = 0;
@@ -209,8 +216,8 @@ const who = (e) => `${e.state.turn.teamIndex}:${e.state.turn.playerIndex}`;
   const e2 = new RulesEngine();
   e2.startRound(2);
   const cap2 = e2.resolveThrow({ collisions: [], ownMatIndex: 1 });
+  eq('6 the second mat is captured', cap2.captures.length, 1);
   e2.chooseMatPer(true);
-  e2.afterThrow(cap2);
   let g2 = 0;
   while (e2.state.turn.teamIndex !== 1 && g2 < 12) {
     shoot(e2, { collisions: [], ownMatIndex: -1 });
