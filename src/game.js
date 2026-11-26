@@ -36,6 +36,85 @@ const _m = new THREE.Matrix4();
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 
+/* ------------------------------------------------------- piece textures --- */
+
+let _ironTextures = null;
+
+/**
+ * Cast-iron surface for the goolahs, used as both roughness and bump so the
+ * specular highlight breaks up over the pitting instead of running across a
+ * perfectly smooth chrome ball.
+ */
+function castIronTextures() {
+  if (_ironTextures) return _ironTextures;
+
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#e6e6e6';
+  ctx.fillRect(0, 0, size, size);
+
+  // Pitting. Darker pixels are smoother, so they read as polished dents.
+  for (let i = 0; i < 5200; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 0.6 + Math.random() * 3.2;
+    const v = Math.round(88 + Math.random() * 112);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${v},${v},${v},0.5)`;
+    ctx.fill();
+  }
+
+  // Shallow hammer dents.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 6 + Math.random() * 16;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(118,118,118,0.45)');
+    g.addColorStop(1, 'rgba(230,230,230,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Left as linear data textures: they carry roughness and relief, not colour.
+  const roughness = new THREE.CanvasTexture(canvas);
+  roughness.wrapS = roughness.wrapT = THREE.RepeatWrapping;
+  roughness.repeat.set(2, 1);
+  const bump = new THREE.CanvasTexture(canvas);
+  bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+  bump.repeat.set(2, 1);
+
+  _ironTextures = { roughness, bump };
+  return _ironTextures;
+}
+
+let _contactShadowTexture = null;
+
+/** Soft blob used as the goolah's contact shadow on the dirt. */
+function contactShadowTexture() {
+  if (_contactShadowTexture) return _contactShadowTexture;
+
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 3, 64, 64, 62);
+  g.addColorStop(0, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.38, 'rgba(255,255,255,0.55)');
+  g.addColorStop(0.72, 'rgba(255,255,255,0.16)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+
+  _contactShadowTexture = new THREE.CanvasTexture(canvas);
+  return _contactShadowTexture;
+}
+
 export class Game {
   constructor({ scene, camera, renderer, world, ui }) {
     this.scene = scene;
@@ -139,18 +218,32 @@ export class Game {
   }
 
   buildBalls() {
-    const ballGeo = new THREE.SphereGeometry(CONFIG.ballRadius, 28, 20);
-    const bandGeo = new THREE.TorusGeometry(CONFIG.ballRadius * 1.004, 0.027, 8, 32);
+    // A goolah is a heavy cast-steel ball: a dense sphere with a broken-up
+    // specular, a raised team band turned into the metal, two cast pips on the
+    // poles so its roll is visible, and a soft contact shadow on the dirt.
+    const ballGeo = new THREE.SphereGeometry(CONFIG.ballRadius, 32, 24);
+    const bandGeo = new THREE.TorusGeometry(CONFIG.ballRadius * 1.008, 0.03, 10, 40);
+    const pipGeo = new THREE.SphereGeometry(CONFIG.ballRadius * 0.16, 10, 8);
+
+    const iron = castIronTextures();
+    const shadowTex = contactShadowTexture();
+    const shadowGeo = new THREE.PlaneGeometry(
+      CONFIG.ballRadius * 5.2,
+      CONFIG.ballRadius * 5.2
+    );
 
     TEAMS.forEach((team, teamIndex) => {
       for (let playerIndex = 0; playerIndex < CONFIG.playerCount; playerIndex++) {
         const group = new THREE.Group();
 
         const material = new THREE.MeshStandardMaterial({
-          color: 0xc6ccd6,
+          color: 0xbec5d1,
           metalness: 1.0,
-          roughness: 0.22,
-          envMapIntensity: 1.45,
+          roughness: 0.36,
+          roughnessMap: iron.roughness,
+          bumpMap: iron.bump,
+          bumpScale: 0.03,
+          envMapIntensity: 1.7,
         });
         const mesh = new THREE.Mesh(ballGeo, material);
         mesh.castShadow = true;
@@ -161,13 +254,33 @@ export class Game {
           bandGeo,
           new THREE.MeshStandardMaterial({
             color: team.color,
-            metalness: 0.5,
-            roughness: 0.34,
-            emissive: new THREE.Color(team.color).multiplyScalar(0.4),
+            metalness: 0.66,
+            roughness: 0.28,
+            emissive: new THREE.Color(team.color).multiplyScalar(0.24),
           })
         );
         band.rotation.x = Math.PI / 2;
         group.add(band);
+
+        for (const side of [-1, 1]) {
+          const pip = new THREE.Mesh(pipGeo, material);
+          pip.position.y = side * CONFIG.ballRadius * 0.93;
+          group.add(pip);
+        }
+
+        const shadow = new THREE.Mesh(
+          shadowGeo,
+          new THREE.MeshBasicMaterial({
+            map: shadowTex,
+            color: 0x150c05,
+            transparent: true,
+            opacity: 0.6,
+            depthWrite: false,
+          })
+        );
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.renderOrder = 1;
+        group.add(shadow);
 
         const home = homePosition(teamIndex, playerIndex);
         group.position.copy(home);
@@ -176,6 +289,7 @@ export class Game {
         this.balls.push({
           group,
           mesh,
+          shadow,
           teamIndex,
           playerIndex,
           // home | staged | live | settled | mat
@@ -248,16 +362,68 @@ export class Game {
     this.aimRing.visible = false;
     this.scene.add(this.aimRing);
 
+    // Power gauge on the ground around the goolah: a dim track showing the full
+    // range and a bright arc that fills as power is pulled, running green ->
+    // amber -> red. The arc is one full ring with its draw range cut back, so
+    // changing the power costs no geometry work and no extra draw call.
+    this.powerSegments = 64;
+    const arcGeo = () =>
+      new THREE.RingGeometry(
+        CONFIG.ballRadius * 1.72,
+        CONFIG.ballRadius * 2.2,
+        this.powerSegments,
+        1
+      );
+
+    this.powerTrack = new THREE.Mesh(
+      arcGeo(),
+      new THREE.MeshBasicMaterial({
+        color: 0x2a1b0d,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+      })
+    );
+    this.powerTrack.rotation.x = -Math.PI / 2;
+    this.powerTrack.position.y = 0.028;
+    this.powerTrack.visible = false;
+    this.powerTrack.frustumCulled = false;
+    this.scene.add(this.powerTrack);
+
+    this.powerArc = new THREE.Mesh(
+      arcGeo(),
+      new THREE.MeshBasicMaterial({
+        color: 0x7fd45a,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      })
+    );
+    this.powerArc.rotation.x = -Math.PI / 2;
+    this.powerArc.position.y = 0.031;
+    this.powerArc.visible = false;
+    this.powerArc.frustumCulled = false;
+    this.scene.add(this.powerArc);
+
     // Dotted flight preview, sampled from the same integrator the game uses.
-    const dotGeo = new THREE.SphereGeometry(0.075, 8, 6);
+    const dotGeo = new THREE.SphereGeometry(0.072, 8, 6);
     const dotMat = new THREE.MeshBasicMaterial({
-      color: 0xfff3d0,
+      color: 0xffffff,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.92,
       depthWrite: false,
     });
-    this.dots = new THREE.InstancedMesh(dotGeo, dotMat, 26);
+    this.dots = new THREE.InstancedMesh(dotGeo, dotMat, 40);
     this.dots.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // Fixed brightness ramp along the path, so the preview reads as a direction
+    // of travel rather than a line of identical beads.
+    const dotColor = new THREE.Color();
+    for (let i = 0; i < this.dots.count; i++) {
+      const t = i / (this.dots.count - 1);
+      dotColor.setHSL(0.115, 0.62, 0.94 - t * 0.34);
+      this.dots.setColorAt(i, dotColor);
+    }
+    if (this.dots.instanceColor) this.dots.instanceColor.needsUpdate = true;
     this.dots.visible = false;
     this.dots.frustumCulled = false;
     this.scene.add(this.dots);
@@ -429,6 +595,8 @@ export class Game {
     this.dots.visible = false;
     this.restRing.visible = false;
     this.aimRing.visible = false;
+    this.powerTrack.visible = false;
+    this.powerArc.visible = false;
     this.marker.visible = false;
   }
 
@@ -569,7 +737,10 @@ export class Game {
     this.ui.setPower(0);
     this.ui.setTurnHint('Rolling…');
     this.hideAimHelpers();
-    this.spawnDust(ball.body.pos, 0.5, 0.35);
+    // Release: two dust rings of different sizes, so the goolah looks like it
+    // left the hand rather than simply appearing in motion.
+    this.spawnDust(ball.body.pos, 1.7, 0.4);
+    this.spawnDust(ball.body.pos, 0.85, 0.72);
   }
 
   /* ------------------------------------------------------------ physics --- */
@@ -598,6 +769,9 @@ export class Game {
 
     this.stepPhysics(dt);
     this.updateCamera(dt);
+    // Mat number tokens turn to face the camera, so the field stays readable
+    // from whatever orbit angle the player has chosen.
+    this.world?.update?.(dt, this.camera);
     this.updateMarker();
     this.updateEffects(dt);
     this.updateAI(dt);
@@ -726,6 +900,32 @@ export class Game {
         _q.setFromAxisAngle(_b, (speed * dt) / R);
         ball.mesh.quaternion.premultiply(_q);
       }
+
+      // Contact shadow: it stays on the dirt while the goolah is off the ground
+      // and spreads and fades as the gap opens. This is what gives the ball its
+      // weight when it is thrown.
+      if (ball.shadow) {
+        const ground = this.surfaceHeightAt(ball.body.pos.x, ball.body.pos.z);
+        const lift = Math.max(0, ball.body.pos.y - R - ground);
+        const closeness = clamp(1 - lift / 1.3, 0, 1);
+        ball.shadow.position.y = ground - ball.body.pos.y + 0.012;
+        ball.shadow.scale.setScalar(0.82 + (1 - closeness) * 0.6);
+        ball.shadow.material.opacity = 0.14 + closeness * 0.58;
+        ball.shadow.visible = closeness > 0.02;
+      }
+    }
+
+    // While aiming, the goolah is drawn wound back from the line in proportion
+    // to the power pulled; the release snaps it forward, which reads as the
+    // throw itself without needing a character model.
+    const aiming = this.activeBall;
+    if (this.phase === 'aiming' && aiming) {
+      const pull = this.aim.power * R * 0.95;
+      aiming.group.position.set(
+        aiming.body.pos.x - this.aim.dir.x * pull,
+        aiming.body.pos.y,
+        aiming.body.pos.z - this.aim.dir.z * pull
+      );
     }
   }
 
@@ -1016,6 +1216,19 @@ export class Game {
     this.aimTip.position.z = length;
 
     this.aimRing.position.set(pos.x, 0.025, pos.z);
+
+    // Power gauge: the arc grows from the goolah and shifts from green through
+    // amber to red, so the top of the range is unmistakable.
+    const power = clamp(this.aim.power, 0, 1);
+    this.powerTrack.position.set(pos.x, 0.028, pos.z);
+    this.powerTrack.visible = true;
+    const lit = Math.round(this.powerSegments * power);
+    this.powerArc.geometry.setDrawRange(0, lit * 6);
+    this.powerArc.position.set(pos.x, 0.031, pos.z);
+    this.powerArc.visible = lit > 0;
+    const hue = 0.3 * (1 - power);
+    this.powerArc.material.color.setHSL(hue, 0.84, 0.52);
+    this.aimMat.color.setHSL(hue, 0.85, 0.58);
 
     // Preview the shot with the same integrator the game runs, so the dotted
     // path and the resting ring show where this throw will actually stop.
