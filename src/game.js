@@ -74,12 +74,27 @@ export class Game {
 
     this.aim = { dir: new THREE.Vector3(0, 0, 1), power: 0, angle: 0 };
     this.pointer = null;
-    this.camLook = new THREE.Vector3(0, 0.35, 1.1);
+    // Every finger on the field right now. One finger aims; two or more orbit
+    // and zoom the camera, so a camera gesture can never become a throw.
+    this.pointers = new Map();
+    this.camGesture = null;
+    // Free orbit rig around the goolah in play. yaw is the horizontal direction
+    // the camera looks in (0 = straight down the line of mats), pitch is its
+    // elevation above the ground and dist the radius it orbits at.
+    this.camRig = {
+      yaw: CONFIG.camera.yaw,
+      pitch: CONFIG.camera.pitch,
+      dist: CONFIG.camera.dist,
+      target: new THREE.Vector3(0, 0.4, 1.1),
+    };
+    this.camLook = this.camRig.target.clone();
     this.camera.position.set(0, 9.4, -14.6);
 
     this._onDown = this._onDown.bind(this);
     this._onMove = this._onMove.bind(this);
     this._onUp = this._onUp.bind(this);
+    this._onCancel = this._onCancel.bind(this);
+    this._onWheel = this._onWheel.bind(this);
   }
 
   /* ------------------------------------------------------------- setup --- */
@@ -94,8 +109,11 @@ export class Game {
     canvas.addEventListener('pointerdown', this._onDown);
     canvas.addEventListener('pointermove', this._onMove);
     canvas.addEventListener('pointerup', this._onUp);
-    canvas.addEventListener('pointercancel', this._onUp);
-    canvas.addEventListener('pointerleave', this._onUp);
+    canvas.addEventListener('pointercancel', this._onCancel);
+    // A finger sliding off the canvas drops the aim instead of firing it.
+    canvas.addEventListener('pointerleave', this._onCancel);
+    // Trackpad and mouse wheel zoom the orbit on desktop.
+    canvas.addEventListener('wheel', this._onWheel, { passive: false });
 
     // Round 1: the throwing team stands on the shared line, the defending team
     // waits behind mats 1 and 3 (rule 2).
@@ -702,7 +720,21 @@ export class Game {
 
   /* --------------------------------------------------------------- input --- */
 
+  /**
+   * One finger aims; two or more fingers move the camera. The two never mix: as
+   * soon as a second finger lands the aim in progress is dropped without a
+   * throw, and the gesture belongs to the orbit rig until the fingers lift.
+   */
   _onDown(event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (this.pointers.size >= 2) {
+      this._cancelAim();
+      this._beginCameraGesture();
+      return;
+    }
+
     if (!this.canAim()) return;
     this.pointer = {
       id: event.pointerId,
@@ -713,7 +745,7 @@ export class Game {
     this.phase = 'aiming';
     this.aim.power = 0;
     this.aim.angle = 0;
-    this.aim.dir.copy(FORWARD);
+    this.aim.dir.copy(this.cameraAxis());
     this.ui.setPower(0);
     this.ui.setTurnHint('Drag to aim, release to throw');
     this.aimGroup.visible = true;
@@ -727,6 +759,16 @@ export class Game {
   }
 
   _onMove(event) {
+    const tracked = this.pointers.get(event.pointerId);
+    if (!tracked) return;
+    tracked.x = event.clientX;
+    tracked.y = event.clientY;
+
+    // Two fingers: orbit and pinch-zoom. Never aim, never throw.
+    if (this.pointers.size >= 2) {
+      this._updateCameraGesture();
+      return;
+    }
     if (!this.pointer || event.pointerId !== this.pointer.id) return;
 
     const dx = event.clientX - this.pointer.startX;
@@ -735,16 +777,14 @@ export class Game {
     if (mag < CONFIG.minDragPx) return;
     this.pointer.moved = true;
 
-    // Screen space -> field space. A drag up the screen throws down the line of
-    // mats; a sideways drag aims left or right.
-    const axis = FORWARD;
+    // Screen space -> field space, measured from where the camera is looking.
+    // Dragging up throws away from the viewer, down throws toward them, and a
+    // sideways drag throws sideways: the whole circle is available, with no
+    // forward restriction and no maximum angle.
+    const axis = this.cameraAxis();
     const side = _b.crossVectors(axis, UP).normalize();
 
-    const along = -dy;
-    if (along <= 0.05) return; // ignore backwards drags
-
-    const rawAngle = Math.atan2(dx, along);
-    const angle = clamp(rawAngle, -CONFIG.maxAimAngle, CONFIG.maxAimAngle);
+    const angle = Math.atan2(dx, -dy);
     this.aim.angle = angle;
     this.aim.dir.copy(axis).multiplyScalar(Math.cos(angle)).addScaledVector(side, Math.sin(angle));
     this.aim.dir.y = 0;
@@ -758,6 +798,15 @@ export class Game {
   }
 
   _onUp(event) {
+    this.pointers.delete(event.pointerId);
+
+    // Lifting one of two fingers ends the camera gesture, not the turn.
+    if (this.camGesture) {
+      if (this.pointers.size >= 2) this._beginCameraGesture();
+      else this.camGesture = null;
+      return;
+    }
+
     if (!this.pointer || (event.pointerId !== undefined && event.pointerId !== this.pointer.id)) {
       return;
     }
@@ -769,13 +818,7 @@ export class Game {
       if (moved && power > 0.06) {
         this.throwBall(power);
       } else {
-        this.phase = 'ready';
-        this.aim.power = 0;
-        this.ui.setPower(0);
-        this.ui.setTurnHint('Drag to aim · release to throw');
-        this.aimGroup.visible = false;
-        this.dots.visible = false;
-        this.restRing.visible = false;
+        this._resetAimState();
       }
     }
     try {
@@ -783,6 +826,112 @@ export class Game {
     } catch (err) {
       /* ignore */
     }
+  }
+
+  /** The canvas lost the pointer or the browser cancelled it: drop the aim. */
+  _onCancel(event) {
+    this.pointers.delete(event.pointerId);
+    if (this.camGesture) {
+      if (this.pointers.size >= 2) this._beginCameraGesture();
+      else this.camGesture = null;
+      return;
+    }
+    this._cancelAim();
+  }
+
+  _cancelAim() {
+    if (this.pointer) {
+      try {
+        this.renderer.domElement.releasePointerCapture(this.pointer.id);
+      } catch (err) {
+        /* ignore */
+      }
+      this.pointer = null;
+    }
+    this._resetAimState();
+  }
+
+  /** Back to a resting turn: no power, no helpers, no throw. */
+  _resetAimState() {
+    if (this.phase !== 'aiming') return;
+    this.phase = 'ready';
+    this.aim.power = 0;
+    this.ui.setPower(0);
+    this.ui.setTurnHint('Drag to aim · release to throw');
+    this.aimGroup.visible = false;
+    this.dots.visible = false;
+    this.restRing.visible = false;
+  }
+
+  /* ------------------------------------------------------ camera gestures --- */
+
+  /** Remember the fingers and the rig when a two-finger gesture starts. */
+  _beginCameraGesture() {
+    const points = [...this.pointers.values()];
+    if (points.length < 2) {
+      this.camGesture = null;
+      return;
+    }
+    const [a, b] = points;
+    this.camGesture = {
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      spread: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      yaw: this.camRig.yaw,
+      pitch: this.camRig.pitch,
+      dist: this.camRig.dist,
+    };
+  }
+
+  _updateCameraGesture() {
+    if (!this.camGesture) {
+      this._beginCameraGesture();
+      return;
+    }
+    const points = [...this.pointers.values()];
+    if (points.length < 2) return;
+    const [a, b] = points;
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    const spread = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+    const cfg = CONFIG.camera;
+
+    // Horizontal drag spins the camera all the way around the field.
+    this.camRig.yaw = this.camGesture.yaw + (cx - this.camGesture.cx) * cfg.orbitSpeed;
+    // Vertical drag changes the viewing height, between the rig's limits.
+    this.camRig.pitch = clamp(
+      this.camGesture.pitch + (cy - this.camGesture.cy) * cfg.pitchSpeed,
+      cfg.minPitch,
+      cfg.maxPitch
+    );
+    // Pinching in pulls the camera closer, pinching out pushes it away.
+    const ratio = this.camGesture.spread / spread;
+    this.camRig.dist = clamp(
+      this.camGesture.dist * Math.pow(ratio, 1.6),
+      cfg.minDist,
+      cfg.maxDist
+    );
+  }
+
+  _onWheel(event) {
+    event.preventDefault();
+    const cfg = CONFIG.camera;
+    this.camRig.dist = clamp(
+      this.camRig.dist * Math.exp(event.deltaY * cfg.wheelSpeed),
+      cfg.minDist,
+      cfg.maxDist
+    );
+  }
+
+  /**
+   * The horizontal direction the camera looks in, on the ground plane. Aiming
+   * is measured from this, so "up the screen" always throws away from the
+   * viewer wherever the camera has been orbited to.
+   */
+  cameraAxis() {
+    const axis = _a.set(Math.sin(this.camRig.yaw), 0, Math.cos(this.camRig.yaw));
+    if (axis.lengthSq() < 1e-6) axis.set(0, 0, 1);
+    return axis.normalize();
   }
 
   canAim() {
@@ -856,24 +1005,41 @@ export class Game {
     this.marker.rotation.y = this.time * 0.9;
   }
 
+  /**
+   * The orbit camera. The player owns yaw, pitch and distance; the game only
+   * decides what the camera orbits around: a blend of the field centre and the
+   * goolah in play, so the mats stay in frame while a throw is followed.
+   */
   updateCamera(dt, snap = false) {
-    const portrait = (this.camera.aspect || 1) < 1;
-    const busy = this.phase === 'flying' || this.phase === 'aiming';
+    const cfg = CONFIG.camera;
+    const rig = this.camRig;
 
-    // The camera always sits behind the shared throw line looking down the
-    // line of mats, because both teams throw from that same line.
-    const goalPos = _a.set(0, portrait ? 9.4 : 7.2, portrait ? -14.6 : -13.2);
-    const goalLook = _b.set(0, 0.35, 1.1);
-
-    if (busy) {
-      const ball = this.activeBall.body.pos;
-      goalLook.lerp(ball, 0.35);
-      goalLook.y = Math.max(goalLook.y, 0.3);
+    // The goolah whose turn it is, or the one rolling after a throw.
+    const followed = this.phase === 'flying' && this.thrownBall ? this.thrownBall : this.activeBall;
+    const goalTarget = _a.set(0, 0.4, 1.1);
+    if (followed) {
+      const p = followed.body.pos;
+      goalTarget.x += p.x * cfg.ballBlendX;
+      goalTarget.z += (p.z - 1.1) * cfg.ballBlendZ;
+      goalTarget.y += Math.max(0, p.y - CONFIG.ballRadius) * 0.5;
     }
 
-    const k = snap ? 1 : 1 - Math.exp(-4.5 * Math.max(dt, 0.001));
-    this.camera.position.lerp(goalPos, k);
-    this.camLook.lerp(goalLook, k);
+    const followK = snap ? 1 : 1 - Math.exp(-cfg.follow * Math.max(dt, 0.001));
+    rig.target.lerp(goalTarget, followK);
+
+    // Where the rig says the camera belongs: on a sphere around that target.
+    const cosPitch = Math.cos(rig.pitch);
+    const goalPos = _b.set(
+      rig.target.x - Math.sin(rig.yaw) * cosPitch * rig.dist,
+      rig.target.y + Math.sin(rig.pitch) * rig.dist,
+      rig.target.z - Math.cos(rig.yaw) * cosPitch * rig.dist
+    );
+    // The orbit must never drop through the dirt.
+    goalPos.y = Math.max(goalPos.y, 0.85);
+
+    const settleK = snap ? 1 : 1 - Math.exp(-cfg.settle * Math.max(dt, 0.001));
+    this.camera.position.lerp(goalPos, settleK);
+    this.camLook.lerp(rig.target, settleK);
     this.camera.lookAt(this.camLook);
   }
 
