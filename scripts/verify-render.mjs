@@ -262,13 +262,13 @@ try {
   check('the throw settles and the field returns to aiming', settled, `phase=${await phaseNow()}`);
 
   const afterFirst = await stateOf();
-  const shot = afterFirst.balls.find(
+  const shotBall = afterFirst.balls.find(
     (b) => b.teamIndex === shooter.teamIndex && b.playerIndex === shooter.playerIndex
   );
   check(
     'the thrown goolah travels downfield',
-    Boolean(shot) && shot.z > shooterStart.z + 1,
-    shot ? `rest z=${shot.z}, start z=${shooterStart.z}` : 'ball missing'
+    Boolean(shotBall) && shotBall.z > shooterStart.z + 1,
+    shotBall ? `rest z=${shotBall.z}, start z=${shooterStart.z}` : 'ball missing'
   );
 
   const guardAfter = afterFirst.balls.find(
@@ -312,7 +312,7 @@ try {
         scoresBefore: staged.scores,
         scoresAfter: afterFirst.scores,
         turnAfterThrow: afterFirst.turn,
-        shotZ: shot?.z,
+        shotZ: shotBall?.z,
         guardZ: { before: guard.z, after: guardAfter?.z },
         consoleErrors: consoleErrors.slice(0, 5),
       },
