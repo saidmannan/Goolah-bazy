@@ -71,7 +71,14 @@ try {
   page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
   await page.goto(`${BASE}/?debug=1`, { waitUntil: 'load' });
-  await page.waitForSelector('#loader.hidden', { timeout: LOADER_TIMEOUT });
+  // The loader stays in the DOM and is dismissed with opacity 0 plus
+  // pointer-events: none (.loader.hidden), so Playwright's visibility wait never
+  // satisfies itself. Wait for the class that actually clears the veil.
+  await page.waitForFunction(
+    () => document.getElementById('loader')?.classList.contains('hidden') === true,
+    undefined,
+    { timeout: LOADER_TIMEOUT }
+  );
 
   const stateOf = () => page.evaluate(() => window.__gb.game.state());
 
