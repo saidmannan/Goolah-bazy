@@ -27,7 +27,11 @@ const { chromium } = require('/opt/appjet/browser/node_modules/playwright');
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.CHECK_PORT || 3112);
-const BASE = `http://127.0.0.1:${PORT}`;
+// Point the same checks at an already running instance (the deployed app) with
+// CHECK_BASE; otherwise a local server is started here and stopped afterwards.
+const CHECK_BASE = process.env.CHECK_BASE;
+const BASE = CHECK_BASE ? CHECK_BASE.replace(/\/+$/, '') : `http://127.0.0.1:${PORT}`;
+const LOADER_TIMEOUT = Number(process.env.CHECK_LOADER_TIMEOUT || 45000);
 const failures = [];
 let checks = 0;
 
@@ -50,17 +54,19 @@ async function waitForServer(url, timeoutMs = 20000) {
   return false;
 }
 
-const server = spawn(process.execPath, ['server.js'], {
-  cwd: repoRoot,
-  env: { ...process.env, PORT: String(PORT) },
-  stdio: 'ignore',
-});
+const server = CHECK_BASE
+  ? null
+  : spawn(process.execPath, ['server.js'], {
+      cwd: repoRoot,
+      env: { ...process.env, PORT: String(PORT) },
+      stdio: 'ignore',
+    });
 let browser;
 
 try {
-  const serverUp = await waitForServer(`${BASE}/api/health`);
-  check('server starts', serverUp);
-  if (!serverUp) throw new Error('local server did not become ready');
+  const serverUp = await waitForServer(`${BASE}/api/health`, CHECK_BASE ? 45000 : 20000);
+  check('server responds', serverUp);
+  if (!serverUp) throw new Error('server did not become ready');
 
   browser = await chromium.launch({
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
@@ -82,9 +88,11 @@ try {
   await page.waitForFunction(
     () => document.getElementById('loader')?.classList.contains('hidden'),
     undefined,
-    { timeout: 45000 }
+    { timeout: LOADER_TIMEOUT }
   );
-  await page.waitForFunction(() => Boolean(window.__gb?.game?.state), undefined, { timeout: 45000 });
+  await page.waitForFunction(() => Boolean(window.__gb?.game?.state), undefined, {
+    timeout: LOADER_TIMEOUT,
+  });
   await page.click('#playBtn');
   await page.waitForFunction(
     () => {
@@ -92,7 +100,7 @@ try {
       return Boolean(g) && g.phase === 'ready' && typeof g.canAim === 'function' && g.canAim();
     },
     undefined,
-    { timeout: 45000 }
+    { timeout: LOADER_TIMEOUT }
   );
 
   // ---------------------------------------------------------------- helpers --
@@ -517,5 +525,5 @@ try {
   process.exitCode = 1;
 } finally {
   if (browser) await browser.close().catch(() => {});
-  server.kill();
+  if (server) server.kill();
 }
