@@ -110,8 +110,9 @@ export class Game {
     canvas.addEventListener('pointermove', this._onMove);
     canvas.addEventListener('pointerup', this._onUp);
     canvas.addEventListener('pointercancel', this._onCancel);
-    // A finger sliding off the canvas drops the aim instead of firing it.
-    canvas.addEventListener('pointerleave', this._onCancel);
+    // No pointerleave handler on purpose: with pointer capture a finger sliding
+    // off the canvas still reports pointerup, while a leave event can fire
+    // mid-drag on iOS and would silently cancel a valid aim.
     // Trackpad and mouse wheel zoom the orbit on desktop.
     canvas.addEventListener('wheel', this._onWheel, { passive: false });
 
@@ -907,7 +908,7 @@ export class Game {
     // Pinching in pulls the camera closer, pinching out pushes it away.
     const ratio = this.camGesture.spread / spread;
     this.camRig.dist = clamp(
-      this.camGesture.dist * Math.pow(ratio, 1.6),
+      this.camGesture.dist * Math.pow(ratio, cfg.zoomExp),
       cfg.minDist,
       cfg.maxDist
     );
