@@ -574,7 +574,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
     let hi = 1;
     let best = aim.power;
     let bestError = Math.abs(error(aim.power));
-    for (let i = 0; i < 16; i += 1) {
+    for (let i = 0; i < 12; i += 1) {
       const mid = (lo + hi) / 2;
       const e = error(mid);
       if (Math.abs(e) < bestError) {

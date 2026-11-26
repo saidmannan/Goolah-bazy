@@ -295,7 +295,9 @@ export function playMatch(options = {}) {
       continue;
     }
 
-    if (!Number.isFinite(action.angle) || Math.abs(action.angle) > CONFIG.maxAimAngle + 1e-9) {
+    // Full-direction aiming: the player may throw in any horizontal direction,
+    // so the AI's legal action space is a whole turn, not a forward cone.
+    if (!Number.isFinite(action.angle) || Math.abs(action.angle) > Math.PI + 1e-9) {
       stats.illegal.push(`angle out of range at ${seat}: ${action.angle}`);
     }
     if (!Number.isFinite(action.power) || action.power < 0 || action.power > 1) {
