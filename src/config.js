@@ -66,11 +66,38 @@ export const CONFIG = {
   maxSpeed: 17,
   minLift: 1.3,
   maxLift: 4.8,
+  // The AI's own candidate cone (src/ai.js and its harness). Human aiming is
+  // unrestricted: a player may throw in any horizontal direction.
   maxAimAngle: 0.35,
   // Below this drag distance the gesture counts as a tap, not a throw.
   minDragPx: 8,
   // Fraction of the smaller viewport edge that maps to full power.
   powerDragFraction: 0.34,
+
+  /* ------------------------------------------------------------- camera ---- */
+  // Free orbit camera. `yaw` is the horizontal direction the camera looks in
+  // (0 = straight down the line of mats), `pitch` its elevation above the
+  // ground and `dist` the radius it orbits the goolah in play at. Two fingers
+  // change yaw/pitch/dist; nothing else does.
+  camera: {
+    yaw: 0,
+    pitch: 0.52,
+    dist: 18.2,
+    minPitch: 0.14, // ~8deg, almost at eye level
+    maxPitch: 1.36, // ~78deg, nearly straight down
+    minDist: 7.5,
+    maxDist: 32,
+    orbitSpeed: 0.008, // radians per pixel of two-finger drag
+    pitchSpeed: 0.005, // radians per pixel of two-finger vertical drag
+    zoomSpeed: 0.006, // log-distance per pixel of pinch
+    wheelSpeed: 0.0012,
+    follow: 5, // how fast the orbit target chases the goolah in play
+    settle: 9, // how fast the camera itself reaches the rig position
+    // The orbit target is a blend of the field centre and the goolah in play,
+    // so the mats stay in frame while the camera tracks a moving goolah.
+    ballBlendX: 0.6,
+    ballBlendZ: 0.45,
+  },
 
   /* --------------------------------------------------------------- mats ---- */
   // A goolah has to be rolling gently to settle into a mat.
