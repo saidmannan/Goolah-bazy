@@ -58,9 +58,9 @@ const server = spawn(process.execPath, ['server.js'], {
 let browser;
 
 try {
-  const up = await waitForServer(`${BASE}/api/health`);
-  check('server starts', up);
-  if (!up) throw new Error('local server did not become ready');
+  const serverUp = await waitForServer(`${BASE}/api/health`);
+  check('server starts', serverUp);
+  if (!serverUp) throw new Error('local server did not become ready');
 
   browser = await chromium.launch({
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
