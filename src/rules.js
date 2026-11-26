@@ -225,6 +225,15 @@ export class RulesEngine {
     return Boolean(this.state.matPer[teamIndex]?.[playerIndex]);
   }
 
+  /* §3  may the player whose turn it is score against this goolah right now? */
+  isTargetEligible(teamIndex, playerIndex) {
+    const s = this.state;
+    const t = s.turn;
+    if (!t) return false;
+    const locked = s.locked[t.teamIndex][t.playerIndex] || [];
+    return !locked.includes(ballKey(teamIndex, playerIndex));
+  }
+
   award(teamIndex, points, reason) {
     const s = this.state;
     if (!points) return;
@@ -284,6 +293,9 @@ export class RulesEngine {
       captures: [],
       matPerOffers: [],
       restore: [],
+      /* Keys of opponent goolahs the throw touched but could not score
+         against, because they were already taken in this scoring sequence. */
+      ineligible: [],
       extraChance: false,
       notes: [],
       matchOver: false,
@@ -301,7 +313,19 @@ export class RulesEngine {
       s.turn.pendingMatPer = null;
     }
 
-    const collisions = Array.isArray(shot.collisions) ? shot.collisions : [];
+    /* §8  one contact per goolah per throw. The game reports first contact
+       only, but the engine must not rely on that: a repeated report of the same
+       goolah can never become a second point or a second extra chance. */
+    const rawCollisions = Array.isArray(shot.collisions) ? shot.collisions : [];
+    const seen = new Set();
+    const collisions = [];
+    for (const c of rawCollisions) {
+      if (!c) continue;
+      const key = ballKey(c.teamIndex, c.playerIndex);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      collisions.push(c);
+    }
 
     /* §7  a teammate collision scores nothing, grants no chance, and the
        teammate's goolah goes back to exactly where it was. Collision order
@@ -316,14 +340,25 @@ export class RulesEngine {
       result.notes.push('teammate hit: no point, no extra chance, goolah restored');
     }
 
+    /* §3  the scoring sequence. s.locked[team][player] holds the keys of the
+       opponent goolahs this player has already scored against. A goolah on that
+       list is worth nothing until a completed mat clears it: another throw, the
+       goolah coming to rest, or the turn carrying on with an extra chance all
+       leave it locked. */
+    if (!Array.isArray(s.locked[team][player])) s.locked[team][player] = [];
+    const locked = s.locked[team][player];
+    const isEligible = (c) => !locked.includes(ballKey(c.teamIndex, c.playerIndex));
+
     /* §5  a Mat-per goolah is worth exactly 3 (stays in the hollow) or 7
        (knocked out), and that replaces the normal Tir point. Only the first
-       collision with it counts (§8). */
+       collision with it counts (§8), and a Mat-per goolah already scored
+       against in this sequence cannot be scored against twice. */
     const matPerHits = collisions.filter((c) => c.kind === 'opponent' && c.matPer);
-    if (matPerHits.length) {
-      const first = matPerHits[0];
-      const mat = s.mats[first.matIndex];
-      if (first.knockedOutOfMat) {
+    const eligibleMatPer = matPerHits.filter(isEligible);
+    if (eligibleMatPer.length) {
+      const hit = eligibleMatPer[0];
+      const mat = s.mats[hit.matIndex];
+      if (hit.knockedOutOfMat) {
         this.award(team, RULES.matPerKnockoutPoints, 'matper-knockout');
         result.points += RULES.matPerKnockoutPoints;
         result.awards.push({
@@ -333,7 +368,7 @@ export class RulesEngine {
         });
         /* §5  the mat stays completed, Mat-per ends. */
         if (mat) mat.matPer = null;
-        s.matPer[first.teamIndex][first.playerIndex] = null;
+        s.matPer[hit.teamIndex][hit.playerIndex] = null;
         result.notes.push('Mat-per goolah knocked out: 7 points, mat stays completed, Mat-per ends');
       } else {
         this.award(team, RULES.matPerHoldPoints, 'matper-hold');
@@ -345,26 +380,46 @@ export class RulesEngine {
         });
         result.notes.push('Mat-per goolah stays in the hollow: 3 points, Mat-per continues');
       }
+      /* §3  that goolah is scored against for the rest of this sequence. */
+      const scoredKey = ballKey(hit.teamIndex, hit.playerIndex);
+      if (!locked.includes(scoredKey)) locked.push(scoredKey);
       result.extraChance = true;
       if (matPerHits.length > 1) result.notes.push('only the first Mat-per collision scores');
+    } else if (matPerHits.length) {
+      for (const c of matPerHits) {
+        const key = ballKey(c.teamIndex, c.playerIndex);
+        if (!result.ineligible.includes(key)) result.ineligible.push(key);
+      }
+      result.notes.push(
+        'Mat-per goolah already scored against: no point, no extra chance'
+      );
     }
 
     /* §3/§8  a normal Tir: one point and one extra chance at most, however
-       many opponent goolahs the throw touches. */
+       many opponent goolahs the throw touches — and only for a goolah this
+       player has not already scored against in this sequence. */
     const plainHits = collisions.filter((c) => c.kind === 'opponent' && !c.matPer);
-    if (plainHits.length) {
+    const eligiblePlain = plainHits.filter(isEligible);
+    if (eligiblePlain.length) {
       this.award(team, RULES.tirPoints, 'tir');
       result.points += RULES.tirPoints;
       result.awards.push({ type: 'tir', points: RULES.tirPoints, teamIndex: team });
       result.extraChance = true;
-      for (const c of plainHits) {
+      for (const c of eligiblePlain) {
         const key = ballKey(c.teamIndex, c.playerIndex);
-        const locked = s.locked[team][player];
         if (!locked.includes(key)) locked.push(key);
       }
       if (plainHits.length > 1) {
         result.notes.push('both opponents hit: still one Tir and one extra chance');
       }
+    } else if (plainHits.length) {
+      /* The same goolah hit again before a Mat: no point and no extra chance,
+         so the throw simply ends the sequence. */
+      for (const c of plainHits) {
+        const key = ballKey(c.teamIndex, c.playerIndex);
+        if (!result.ineligible.includes(key)) result.ineligible.push(key);
+      }
+      result.notes.push('already scored against that goolah: no point, no extra chance');
     }
 
     /* §3/§4  the thrown goolah falling into an open mat captures it for its
@@ -540,6 +595,9 @@ export class RulesEngine {
         finalOpportunity: s.turn.finalOpportunity,
       },
       targets: this.availableTargets(),
+      /* §3  opponent goolahs each player has already scored against in the
+         sequence in progress, so the HUD and the tests can see the lockout. */
+      locked: s.locked.map((teamLocks) => teamLocks.map((list) => [...list])),
       matPer: s.matPer.map((team) => team.map((m) => (m ? { ...m } : null))),
       finalMat: s.finalMat ? { ...s.finalMat } : null,
       roundOver: s.roundOver,
