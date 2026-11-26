@@ -106,7 +106,10 @@ for (const type of ['touchstart', 'touchmove']) {
   document.addEventListener(
     type,
     (event) => {
-      if (event.touches.length > 1) event.preventDefault();
+      // A non-cancelable event is one the browser has already committed to
+      // (scrolling is under way); calling preventDefault would only log a
+      // warning, so leave it alone.
+      if (event.cancelable && event.touches.length > 1) event.preventDefault();
     },
     { passive: false }
   );
