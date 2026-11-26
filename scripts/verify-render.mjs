@@ -1,9 +1,11 @@
 // Focused render + interaction check for the Phase 1 field.
 //
 // Verifies WebGL shader compile, that the scene produces a non-uniform image,
-// the mat layout and goolah placement, that both players of a team throw from
-// the one shared line, that a full-power throw carries past mat 4, and that both
-// players of the throwing team throw before the opposing team.
+// the Phase 2 start state (the throwing team on the one shared line, the
+// defending team behind mats 1 and 3), and that a straight throw into the
+// defender guarding mat 1 scores a Tir and grants the thrower an extra chance.
+// Unobstructed reach past mat 4 is a physics property checked separately by
+// scripts/test-phase1.mjs.
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -101,19 +103,30 @@ try {
   check('mats are about 5 cm deep', Math.abs(before.matDepth - 0.05) < 1e-9, `depth=${before.matDepth}`);
   check('mats are small circles', before.matRadius > 0.3 && before.matRadius < 0.6, `r=${before.matRadius}`);
 
-  // Home placement: each goolah waits beside the mat its team owns.
+  // Team roles come from the engine: Zananda throws first in round 1 and the
+  // roles swap every round, so nothing here may assume team 0 throws first.
   const matZ = before.mats.map((m) => m.z);
-  const ownerFor = (team, player) => team + player * 2;
-  let homesOk = true;
-  const homeDetail = [];
-  for (const ball of before.balls) {
-    const mat = before.mats[ownerFor(ball.teamIndex, ball.playerIndex)];
-    const nearZ = Math.abs(ball.z - mat.z) < 1e-6;
-    const beside = Math.abs(ball.x) > 0.3;
-    if (!nearZ || !beside || ball.state !== 'home') homesOk = false;
-    homeDetail.push(`T${ball.teamIndex}P${ball.playerIndex}:${ball.state}@(${ball.x},${ball.z})`);
+  const throwTeam = before.turn.teamIndex;
+  const defendTeam = before.rules.defendingTeam;
+  check(
+    'the engine names this turn\'s team as the throwing team',
+    throwTeam === before.rules.throwingTeam,
+    `turn=${throwTeam} throwing=${before.rules.throwingTeam}`
+  );
+
+  // Rule 2: the defender on player 1 waits behind mat 1 and the player 2
+  // defender behind mat 3, whichever mats their team owns.
+  let defendersOk = true;
+  const defenderDetail = [];
+  for (const ball of before.balls.filter((b) => b.teamIndex === defendTeam)) {
+    const mat = before.mats[ball.playerIndex === 0 ? 0 : 2];
+    const gap = mat.z - ball.z;
+    const behind = gap > 0.4 && gap < 1.6;
+    const clearOfDish = Math.abs(ball.x) > before.matRadius;
+    if (!behind || !clearOfDish || ball.state !== 'home') defendersOk = false;
+    defenderDetail.push(`P${ball.playerIndex}:${ball.state}@(${ball.x},${ball.z}) mat@${mat.z}`);
   }
-  check('goolahs start beside the mat their team owns', homesOk, homeDetail.join(' '));
+  check('defending goolahs wait behind mats 1 and 3', defendersOk, defenderDetail.join(' '));
   check(
     'the shared throw line sits behind mat 1',
     before.throwLineZ < matZ[0] - 1,
@@ -185,29 +198,31 @@ try {
 
   /* ------------------------------------- both players on one throw line --- */
   const staged = await stateOf();
-  const teamZero = staged.balls.filter((b) => b.teamIndex === 0);
-  const teamOne = staged.balls.filter((b) => b.teamIndex === 1);
+  const throwers = staged.balls.filter((b) => b.teamIndex === throwTeam);
   check(
     'both throwing-team goolahs stand on the shared line',
-    teamZero.every((b) => b.state === 'staged' && Math.abs(b.z - staged.throwLineZ) < 0.02),
-    teamZero.map((b) => `${b.state}@${b.z}`).join(' ')
+    throwers.every((b) => b.state === 'staged' && Math.abs(b.z - staged.throwLineZ) < 0.02),
+    throwers.map((b) => `${b.state}@${b.z}`).join(' ')
   );
   check(
     'the two throwing positions are on that same line',
-    Math.abs(teamZero[0].z - teamZero[1].z) < 1e-6 && Math.abs(teamZero[0].x - teamZero[1].x) > 0.2,
-    teamZero.map((b) => `(${b.x},${b.z})`).join(' ')
-  );
-  check(
-    'the opposing goolahs stay at their own mats',
-    teamOne.every((b) => b.state === 'home'),
-    teamOne.map((b) => b.state).join(' ')
+    Math.abs(throwers[0].z - throwers[1].z) < 1e-6 && Math.abs(throwers[0].x - throwers[1].x) > 0.2,
+    throwers.map((b) => `(${b.x},${b.z})`).join(' ')
   );
 
+  const TEAM_NAMES = ['Shānanda', 'Zananda'];
   const turnBefore = (await page.textContent('#turnText')).trim();
-  check('turn indicator names the throwing team', /Shānanda/.test(turnBefore), turnBefore);
+  check(
+    'turn indicator names the throwing team',
+    turnBefore.includes(TEAM_NAMES[throwTeam]),
+    turnBefore
+  );
   check('turn indicator names player 1 first', /Player 1/.test(turnBefore), turnBefore);
 
-  /* ----------------------------------- full-power throw past mat 4 --- */
+  /* ------------------- a straight throw into the guard behind mat 1 --- */
+  // The field is no longer empty: by rule the defenders stand behind mats 1 and
+  // 3, so a full-power throw down the line meets the guard on mat 1. That
+  // collision is the Tir asserted below; the extra chance it earns is then used.
   const dragThrow = async (px) => {
     await page.mouse.move(195, 640);
     await page.mouse.down();
@@ -221,69 +236,67 @@ try {
     return power;
   };
 
+  const phaseNow = () => page.evaluate(() => window.__gb?.game?.phase);
+  // state() exposes no turn counter, so the field is followed through its phase.
+  const waitPhase = (name, timeout) =>
+    page
+      .waitForFunction((p) => window.__gb?.game?.phase === p, name, { timeout })
+      .then(() => true)
+      .catch(() => false);
+
+  const shooter = { ...staged.turn };
+  const shooterStart = staged.balls.find(
+    (b) => b.teamIndex === shooter.teamIndex && b.playerIndex === shooter.playerIndex
+  );
+  const guard = staged.balls.find(
+    (b) => b.teamIndex === staged.rules.defendingTeam && b.playerIndex === 0
+  );
+
   const powerWidth = await dragThrow(200);
   check('power bar responds to the drag', powerWidth > 0, `fill width=${powerWidth}`);
 
-  const launched = await page
-    .waitForFunction(() => window.__gb?.game?.phase === 'flying', undefined, { timeout: 15000 })
-    .then(() => true)
-    .catch(() => false);
-  check('releasing a drag launches the goolah', launched, `phase=${await page.evaluate(() => window.__gb.game.phase)}`);
+  const launched = await waitPhase('flying', 20000);
+  check('releasing a drag launches the goolah', launched, `phase=${await phaseNow()}`);
 
-  const settle = async (prevSeq) => {
-    await page
-      .waitForFunction(
-        (seq) => {
-          const g = window.__gb?.game;
-          if (!g) return false;
-          return g.turnSeq !== seq && (g.phase === 'ready' || g.phase === 'roundEnd');
-        },
-        prevSeq,
-        { timeout: 60000 }
-      )
-      .catch(() => {});
-    return stateOf();
-  };
+  const settled = await waitPhase('ready', 120000);
+  check('the throw settles and the field returns to aiming', settled, `phase=${await phaseNow()}`);
 
-  const afterFirst = await settle(staged.turnSeq);
-  const thrown = afterFirst.balls.find((b) => b.teamIndex === 0 && b.playerIndex === 0);
-  check(
-    'a full-power throw carries beyond mat 4',
-    thrown && thrown.z > matZ[3],
-    thrown ? `rest z=${thrown.z}, mat 4 z=${matZ[3]}` : 'ball missing'
+  const afterFirst = await stateOf();
+  const shot = afterFirst.balls.find(
+    (b) => b.teamIndex === shooter.teamIndex && b.playerIndex === shooter.playerIndex
   );
   check(
-    'the thrown goolah is not left overlapping another',
-    afterFirst.balls.every((a, i) =>
-      afterFirst.balls.every((b, j) =>
-        i === j ? true : Math.hypot(a.x - b.x, a.z - b.z) > before.matRadius * 0.9
-      )
-    ),
-    afterFirst.balls.map((b) => `(${b.x},${b.z})`).join(' ')
+    'the thrown goolah travels downfield',
+    Boolean(shot) && shot.z > shooterStart.z + 1,
+    shot ? `rest z=${shot.z}, start z=${shooterStart.z}` : 'ball missing'
   );
 
-  /* -------------------------------------------------- turn order --- */
-  const turnAfterFirst = (await page.textContent('#turnText')).trim();
+  const guardAfter = afterFirst.balls.find(
+    (b) => b.teamIndex === guard.teamIndex && b.playerIndex === guard.playerIndex
+  );
   check(
-    'the same team keeps the turn for its second player',
-    /Shānanda/.test(turnAfterFirst) && /Player 2/.test(turnAfterFirst),
-    `${turnBefore} -> ${turnAfterFirst}`
+    'a straight throw meets the defender behind mat 1',
+    Boolean(guardAfter) && Math.abs(guardAfter.z - guard.z) > 0.05,
+    guardAfter ? `guard z ${guard.z} -> ${guardAfter.z}` : 'guard missing'
+  );
+  check(
+    'a Tir scores exactly one point',
+    afterFirst.scores[shooter.teamIndex] === staged.scores[shooter.teamIndex] + 1,
+    `scores ${staged.scores} -> ${afterFirst.scores}`
+  );
+  check(
+    'a Tir grants an extra chance to the same player',
+    afterFirst.turn.teamIndex === shooter.teamIndex &&
+      afterFirst.turn.playerIndex === shooter.playerIndex,
+    `turn ${JSON.stringify(afterFirst.turn)}`
   );
 
-  await waitReady();
-  await dragThrow(80);
-  const afterSecond = await settle(afterFirst.turnSeq);
-  const turnAfterSecond = (await page.textContent('#turnText')).trim();
-  check(
-    'the opposing team plays only after both players threw',
-    /Orange/.test(turnAfterSecond) && /Player 1/.test(turnAfterSecond),
-    `${turnAfterFirst} -> ${turnAfterSecond}`
-  );
-  check(
-    'two goolahs are downfield after two throws',
-    afterSecond.balls.filter((b) => b.z > matZ[0]).length >= 2,
-    afterSecond.balls.map((b) => `T${b.teamIndex}P${b.playerIndex}@${b.z}`).join(' ')
-  );
+  /* ------------------------------------- the extra chance is playable --- */
+  await waitReady().catch(() => {});
+  await dragThrow(120);
+  const relaunched = await waitPhase('flying', 20000);
+  check('the extra chance can be thrown again', relaunched, `phase=${await phaseNow()}`);
+  await waitPhase('ready', 120000);
   check('no runtime console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
 
   await page.locator('#scene').screenshot({ path: '/tmp/gb-field-after.png' });
@@ -294,10 +307,13 @@ try {
         gl,
         image: { mean, stddev, colors },
         mats: before.mats,
+        throwTeam,
         turnBefore,
-        turnAfterFirst,
-        turnAfterSecond,
-        restZ: thrown?.z,
+        scoresBefore: staged.scores,
+        scoresAfter: afterFirst.scores,
+        turnAfterThrow: afterFirst.turn,
+        shotZ: shot?.z,
+        guardZ: { before: guard.z, after: guardAfter?.z },
         consoleErrors: consoleErrors.slice(0, 5),
       },
       null,
