@@ -412,8 +412,14 @@ try {
     };
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const s0 = sample();
-    await wait(140);
-    const s1 = sample();
+    // The headless renderer is far slower than a phone GPU, so wait for the
+    // goolah to actually travel instead of a fixed delay: the follow must track
+    // it once it moves, whatever the frame rate happens to be.
+    let s1 = s0;
+    for (let i = 0; i < 60 && s1 && s0 && Math.abs(s1.ballZ - s0.ballZ) < 0.9; i += 1) {
+      await wait(50);
+      s1 = sample();
+    }
 
     return {
       phase: launchPhase,
