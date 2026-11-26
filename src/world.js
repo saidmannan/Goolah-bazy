@@ -1,31 +1,34 @@
 import * as THREE from 'three';
 import { CONFIG, TEAMS } from './config.js';
+import { MAT, courtBounds, matBaseHeight, terrainHeight, valueNoise } from './terrain.js';
+import { createMatDish } from './models.js';
 
 /* -------------------------------------------------------------------------
    Goolah Bazy — the playing field
    -------------------------------------------------------------------------
    Visual identity: a packed-earth court cut out of the Afghan plain in late
    afternoon light. The court is a lighter, swept strip of beaten earth; the
-   plain around it sits slightly lower and grows dry grass and stones; low
-   earthen berms mark the edge of play.
+   plain around it sits slightly lower, dry and stony; grass and rocks carry the
+   eye out to hazy ridges.
 
-   The four mats are real holes in the court surface, each filled with a
+   The four mats are real holes cut in the ground surface, each filled with a
    modelled shallow dish (lathe-turned profile: recessed floor, curved inner
-   wall, raised rim, collar that the dirt overhangs). Nothing is a painted
-   circle or a glowing disc, and because the hole is cut in the ground the dish
-   reads correctly from every camera angle, including from below the rim.
+   wall, raised rim, skirt buried under the dirt). Nothing is a painted circle
+   or a glowing disc, and because the hole is cut in the earth the dish reads
+   correctly from every camera angle, including from below the rim.
 
    Everything is procedural — canvas textures and primitives — so the whole
    environment costs no downloads and stays cheap enough for a phone.
 ------------------------------------------------------------------------- */
 
+// The swept court is the terrain.js court plus a margin of worked ground, so the
+// fine ground mesh always overlaps the coarse plain and never leaves a crack.
 const COURT = {
-  // The court reaches past the playable strip so a goolah can always be seen
-  // resting on ground rather than hanging over an edge.
-  halfWidth: CONFIG.playArea.halfWidth + 1.9,
-  minZ: CONFIG.playArea.minZ - 2.2,
-  maxZ: CONFIG.playArea.maxZ + 2.2,
-  drop: 0.16, // the plain around the court sits this far below it
+  halfWidth: courtBounds().halfWidth + 0.6,
+  minZ: courtBounds().minZ - 0.6,
+  maxZ: courtBounds().maxZ + 0.6,
+  // The plain mesh sits this far under the court, so the overlap stays hidden.
+  sink: 0.012,
 };
 
 const PALETTE = {
@@ -500,8 +503,10 @@ function createThrowLine() {
       polygonOffsetFactor: -2,
     })
   );
+  // The stripe follows the ground, so it is never floating or buried.
+  const lineY = terrainHeight(0, CONFIG.throwLineZ) + 0.006;
   line.rotation.x = -Math.PI / 2;
-  line.position.set(0, 0.006, CONFIG.throwLineZ);
+  line.position.set(0, lineY, CONFIG.throwLineZ);
   line.receiveShadow = false;
 
   const group = new THREE.Group();
@@ -519,8 +524,10 @@ function createThrowLine() {
   });
   for (const side of [-1, 1]) {
     const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.62), tickMat);
+    const tickX = side * CONFIG.throwLineHalfWidth;
+    const tickZ = CONFIG.throwLineZ + 0.3;
     tick.rotation.x = -Math.PI / 2;
-    tick.position.set(side * CONFIG.throwLineHalfWidth, 0.006, CONFIG.throwLineZ + 0.3);
+    tick.position.set(tickX, terrainHeight(tickX, tickZ) + 0.006, tickZ);
     group.add(tick);
   }
 
@@ -655,10 +662,10 @@ function scatterPebbles(scene) {
     const radius = Math.sqrt(Math.random()) * 32;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
-    // Keep the swept court clear of debris.
+    // Keep the swept court clear of debris, and seat everything on the ground.
     const onCourt =
       Math.abs(x) < COURT.halfWidth - 0.3 && z > COURT.minZ + 0.3 && z < COURT.maxZ - 0.3;
-    dummy.position.set(x, onCourt ? 0.012 : -COURT.drop + 0.03, z);
+    dummy.position.set(x, terrainHeight(x, z) + (onCourt ? 0.006 : 0.02), z);
     dummy.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
     const s = rand(0.35, 1.35) * (onCourt ? 0.6 : 1);
     dummy.scale.set(s, s * 0.7, s);
@@ -690,11 +697,9 @@ function scatterGrass(scene) {
     const angle = Math.random() * Math.PI * 2;
     // Only outside the court, so nothing grows through the playing surface.
     const radius = rand(COURT.halfWidth + 0.7, 36);
-    dummy.position.set(
-      Math.cos(angle) * radius,
-      -COURT.drop,
-      Math.sin(angle) * radius * 1.15
-    );
+    const gx = Math.cos(angle) * radius;
+    const gz = Math.sin(angle) * radius * 1.15;
+    dummy.position.set(gx, terrainHeight(gx, gz) - 0.02, gz);
     dummy.rotation.set(rand(-0.18, 0.18), Math.random() * Math.PI, rand(-0.18, 0.18));
     const s = rand(0.6, 1.9);
     dummy.scale.set(s, s * rand(0.7, 1.6), s);
@@ -718,11 +723,9 @@ function scatterRocks(scene) {
     const angle = Math.random() * Math.PI * 2;
     const radius = rand(COURT.halfWidth + 3, 32);
     const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(rand(0.5, 1.5), 0), mat);
-    rock.position.set(
-      Math.cos(angle) * radius,
-      rand(0.05, 0.3) - COURT.drop,
-      Math.sin(angle) * radius
-    );
+    const rx = Math.cos(angle) * radius;
+    const rz = Math.sin(angle) * radius;
+    rock.position.set(rx, terrainHeight(rx, rz) + rand(0.02, 0.14), rz);
     rock.rotation.set(Math.random(), Math.random(), Math.random());
     rock.scale.y = rand(0.5, 0.9);
     rock.castShadow = true;
