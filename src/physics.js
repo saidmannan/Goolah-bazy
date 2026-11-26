@@ -147,11 +147,24 @@ export function stepBallMotion(body, h, cfg, surface) {
     }
 
     // Rolling constraint: a sphere rolling without slipping turns at
-    // w = (n × v) / R. Blending towards it models the short slide a struck ball
-    // makes before its spin catches up with its travel.
+    // w = (n × v) / R.
+    //
+    // A ball that is genuinely slipping (just struck, or just landed) is pulled
+    // towards that constraint over a short time, which is the visible slide
+    // before the spin catches up. A ball already rolling is *tied* to it: if it
+    // merely kept blending, the constantly falling target left by rolling
+    // resistance would leave the spin permanently ahead of the travel, and the
+    // goolah would look like it was skidding forward while spinning faster than
+    // it moves.
     _spin.crossVectors(n, v).multiplyScalar(1 / R);
     slip = _rel.subVectors(w, _spin).length();
-    w.lerp(_spin, Math.min(1, (cfg.spinGrip ?? 18) * h));
+    const rollTarget = _spin.length();
+    if (slip <= Math.max(0.35, rollTarget * 0.08)) {
+      // Pure rolling: angular velocity follows the travel exactly.
+      w.copy(_spin);
+    } else {
+      w.lerp(_spin, Math.min(1, (cfg.spinGrip ?? 18) * h));
+    }
 
     if (horizontalSpeed(v) < cfg.sleepSpeed && Math.abs(v.y) < 0.08) {
       v.set(0, 0, 0);
