@@ -238,6 +238,10 @@ export function sweptContact(a, b, cfg) {
   const result = {
     a,
     b,
+    // Positions *at the moment of contact*, so the event is self-contained: a
+    // caller can judge the strike even after the goolahs have rolled on.
+    aPos: a.pos.clone(),
+    bPos: b.pos.clone(),
     normal: _n.clone(),
     point: a.pos.clone().addScaledVector(_n, a.radius),
     time: t,
@@ -294,6 +298,8 @@ export function resolveBallCollision(a, b, cfg) {
     impactSpeed: res.impactSpeed,
     normal: res.normal,
     point: res.point,
+    aPos: res.aPos,
+    bPos: res.bPos,
   };
 }
 

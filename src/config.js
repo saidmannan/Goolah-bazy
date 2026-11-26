@@ -77,7 +77,11 @@ export const CONFIG = {
   minContactSpeed: 0.25,
 
   /* ------------------------------------------------------------- throws ---- */
-  minSpeed: 10.5,
+  // A gentle throw is genuinely gentle: at 4.5 m/s a goolah creeps about a
+  // metre, which is what makes the near mats (2.0 m and 4.6 m from the line)
+  // completable at all. With a 10.5 m/s floor the softest possible throw still
+  // carried 6 m and simply rolled past mats 1 and 2.
+  minSpeed: 4.5,
   maxSpeed: 17.5,
   // A heavy ball is thrown low: it skims, lands and rolls rather than flying.
   minLift: 0.4,
