@@ -542,27 +542,56 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
   }
 
   /**
-   * The power that really stops inside the dish. predict() is the same oracle
-   * the value function trusts, so a mat is never thrown with a power that the
-   * simulation already knows misses.
+   * The power (and line) that really stops inside the dish.
+   *
+   * predict() is the same oracle the value function trusts, so a mat is never
+   * thrown with a power the simulation already knows misses. The previous
+   * version returned the unsolved aim whenever the bisection failed, which
+   * meant a strong player still burned chances on shots it could see were
+   * going wide — the reason mat conversion barely differed between levels.
+   *
+   * `landed` is reported so the caller can refuse the shot instead.
    */
   function solveMatPower(shooter, candidate, aim, balls, cfg) {
-    const lands = (power) => predict(shooter, aim.angle, power, balls, cfg).selfMat === candidate.matIndex;
-    if (lands(aim.power)) return aim;
+    const lands = (angle, power) =>
+      predict(shooter, angle, power, balls, cfg).selfMat === candidate.matIndex;
+    if (lands(aim.angle, aim.power)) return { aim, landed: true };
 
-    // A dish only accepts a few hundredths of a power unit, which a fixed grid
-    // steps straight over: that is why mat attempts almost never converted.
-    // The stopping distance grows monotonically with power, so bisect on the
-    // signed along-track landing error and land in the middle of the dish.
-    const dir = { x: Math.sin(aim.angle), y: 0, z: Math.cos(aim.angle) };
-    const alongOf = (rest) => (rest.x - shooter.x) * dir.x + (rest.z - shooter.z) * dir.z;
+    // A goolah that stopped off the dish's axis needs its line corrected as
+    // well as its power: bisecting power alone can never fix a lateral miss.
+    // A stronger profile searches a few finer offsets.
+    const offsets = profile.refine >= 6
+      ? [0, -0.004, 0.004, -0.009, 0.009, -0.016, 0.016]
+      : [0, -0.008, 0.008];
+
+    for (const offset of offsets) {
+      const angle = wrapAngle(aim.angle + offset);
+      const power = bisectMatPower(shooter, candidate, angle, balls, cfg);
+      if (lands(angle, power)) return { aim: { ...aim, angle, power }, landed: true };
+    }
+    return { aim, landed: false };
+  }
+
+  /**
+   * Power whose predicted rest sits on the mat centre along this line.
+   *
+   * A dish only accepts a few hundredths of a power unit, which a fixed grid
+   * steps straight over: that is why mat attempts almost never converted. The
+   * stopping distance grows monotonically with power, so bisect on the signed
+   * along-track landing error and land in the middle of the dish.
+   */
+  function bisectMatPower(shooter, candidate, angle, balls, cfg) {
+    const dir = { x: Math.sin(angle), y: 0, z: Math.cos(angle) };
     const target = (candidate.x - shooter.x) * dir.x + (candidate.z - shooter.z) * dir.z;
-    const error = (power) => alongOf(predict(shooter, aim.angle, power, balls, cfg).rest) - target;
+    const error = (power) => {
+      const rest = predict(shooter, angle, power, balls, cfg).rest;
+      return (rest.x - shooter.x) * dir.x + (rest.z - shooter.z) * dir.z - target;
+    };
 
     let lo = 0.02;
     let hi = 1;
-    let best = aim.power;
-    let bestError = Math.abs(error(aim.power));
+    let best = 0.5;
+    let bestError = Infinity;
     for (let i = 0; i < 12; i += 1) {
       const mid = (lo + hi) / 2;
       const e = error(mid);
@@ -573,8 +602,7 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
       if (e > 0) hi = mid;
       else lo = mid;
     }
-    const solved = { ...aim, power: best };
-    return lands(best) ? solved : aim;
+    return best;
   }
 
   function chooseThrow(engine, balls, cfg = CONFIG) {
@@ -654,13 +682,23 @@ export function createAI({ difficulty = DEFAULT_DIFFICULTY, seed = 1 } = {}) {
         if (tir) pool.splice(0, pool.length, tir);
       }
     }
-    const pick = weightedPick(pool);
-    // Execute a mat with a power predict() has verified stops inside the dish.
-    // Solving it separately from the predicted shot is what made mats miss.
-    const aim =
-      pick.candidate.type === 'mat'
-        ? solveMatPower(shooter, pick.candidate, pick.aim, balls, cfg)
-        : pick.aim;
+    let pick = weightedPick(pool);
+    // Execute a mat only with a power predict() has verified stops inside the
+    // dish. When no power lands, a profile that refuses futile shots takes its
+    // best legal Tir instead of spending the chance on a mat it can already
+    // see will miss. A beginner still attempts it — that is its weakness.
+    let aim = pick.aim;
+    if (pick.candidate.type === 'mat') {
+      const solved = solveMatPower(shooter, pick.candidate, pick.aim, balls, cfg);
+      aim = solved.aim;
+      if (!solved.landed && profile.refuseFutile) {
+        const tir = reachable.find((entry) => entry.candidate.type === 'tir');
+        if (tir) {
+          pick = tir;
+          aim = tir.aim;
+        }
+      }
+    }
 
     // Execution error: this is what separates the three levels.
     const angle = wrapAngle(aim.angle + gauss() * profile.aimSigma);
