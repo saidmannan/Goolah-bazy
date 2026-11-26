@@ -263,16 +263,23 @@ export function playMatch(options = {}) {
       continue;
     }
 
-    if (!engine.canThrow()) {
+    // Every turn start is recorded, not just the turns that throw. A player who
+    // holds a Mat-per goolah (§5) has a real turn that ends without a throw, so
+    // logging only throwers made a completed round look out of order.
+    const turn = s.turn;
+    if (!turn) {
       engine.endTurn();
       continue;
     }
-
-    const turn = s.turn;
     const seat = seatKey(turn.teamIndex, turn.playerIndex);
     if (seat !== lastSeat) {
       stats.turnLog.push({ round: s.round, seat });
       lastSeat = seat;
+    }
+
+    if (!engine.canThrow()) {
+      engine.endTurn();
+      continue;
     }
 
     const shooter = ballAt(balls, turn.teamIndex, turn.playerIndex);

@@ -94,13 +94,18 @@ for (const entry of full.turnLog) {
 }
 let orderChecked = 0;
 for (const [round, seats] of perRound) {
-  if (seats.length < 4) continue;
   const throwing = throwingTeamForRound(round);
-  const expected = [seatKey(throwing, 0), seatKey(throwing, 1), seatKey(1 - throwing, 0), seatKey(1 - throwing, 1)];
-  eq(`round ${round} plays thrower P1, thrower P2, defender P1, defender P2`, seats.slice(0, 4).join(','), expected.join(','));
-  orderChecked += 1;
+  const cycle = [seatKey(throwing, 0), seatKey(throwing, 1), seatKey(1 - throwing, 0), seatKey(1 - throwing, 1)];
+  // The order cycles back to the first thrower while a round is live (§3 needs a
+  // turn to come around again), and a round that closes the fourth dish on an
+  // early turn legitimately stops before everyone has thrown (§6 loses those
+  // unused turns). So the whole logged sequence must be the cyclic order, which
+  // is stricter than only checking the first four seats.
+  const expected = seats.map((_, index) => cycle[index % cycle.length]);
+  eq(`round ${round} plays thrower P1, thrower P2, defender P1, defender P2 in order`, seats.join(','), expected.join(','));
+  if (seats.length > 0 && seats.every((seat, index) => seat === expected[index])) orderChecked += 1;
 }
-check('turn order was verified for every completed round', orderChecked === full.rounds, `checked ${orderChecked} of ${full.rounds}`);
+check('turn order was verified for every round played', orderChecked === full.rounds, `checked ${orderChecked} of ${full.rounds}`);
 
 /* ---------------------------------------- measured difficulty separation --- */
 
