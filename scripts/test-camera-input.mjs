@@ -367,7 +367,7 @@ try {
   );
 
   /* ------------------------------- the real throw matches the preview --- */
-  const thrown = await page.evaluate(() => {
+  const thrown = await page.evaluate(async () => {
     const canvas = document.getElementById('scene');
     const fire = (type, id, p) =>
       canvas.dispatchEvent(
