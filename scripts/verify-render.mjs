@@ -14,7 +14,12 @@ const { chromium } = require('/opt/appjet/browser/node_modules/playwright');
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.CHECK_PORT || 3107);
-const BASE = `http://127.0.0.1:${PORT}`;
+// CHECK_BASE points these checks at an already running instance (for example the
+// deployed app) instead of spawning the local server. The loader wait is tunable
+// because a cold start on a small host needs longer than a local build.
+const EXTERNAL_BASE = process.env.CHECK_BASE || '';
+const BASE = EXTERNAL_BASE || `http://127.0.0.1:${PORT}`;
+const LOADER_TIMEOUT = Number(process.env.CHECK_LOADER_TIMEOUT || 20000);
 const failures = [];
 
 function check(name, condition, detail) {
@@ -35,15 +40,17 @@ async function waitForServer(url, timeoutMs = 20000) {
   return false;
 }
 
-const server = spawn(process.execPath, ['server.js'], {
-  cwd: repoRoot,
-  env: { ...process.env, PORT: String(PORT) },
-  stdio: 'ignore',
-});
+const server = EXTERNAL_BASE
+  ? null
+  : spawn(process.execPath, ['server.js'], {
+      cwd: repoRoot,
+      env: { ...process.env, PORT: String(PORT) },
+      stdio: 'ignore',
+    });
 let browser;
 
 try {
-  const up = await waitForServer(`${BASE}/api/health`);
+  const up = await waitForServer(EXTERNAL_BASE ? `${BASE}/` : `${BASE}/api/health`);
   check('server starts', up);
   if (!up) throw new Error('local server did not become ready');
 
@@ -64,7 +71,7 @@ try {
   page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
   await page.goto(`${BASE}/?debug=1`, { waitUntil: 'load' });
-  await page.waitForSelector('#loader.hidden', { timeout: 20000 });
+  await page.waitForSelector('#loader.hidden', { timeout: LOADER_TIMEOUT });
 
   const stateOf = () => page.evaluate(() => window.__gb.game.state());
 
@@ -294,7 +301,7 @@ try {
   failures.push(`unexpected error: ${error.message}`);
 } finally {
   if (browser) await browser.close().catch(() => {});
-  server.kill('SIGTERM');
+  if (server) server.kill('SIGTERM');
 }
 
 if (failures.length) {
