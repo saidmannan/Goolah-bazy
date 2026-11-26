@@ -306,7 +306,7 @@ export function resolveBallCollision(a, b, cfg) {
  * pair per call (the strongest impact), so a single strike can never produce
  * duplicate scoring events.
  */
-export function stepBalls(balls, dt, cfg, surface, onContact) {
+export function stepBalls(balls, dt, cfg, surface, onContact, onImpact) {
   let maxSpeed = 0;
   for (const b of balls) {
     const s = b.vel.length();
@@ -324,7 +324,8 @@ export function stepBalls(balls, dt, cfg, surface, onContact) {
         b.prevPos.copy(b.pos);
         continue;
       }
-      stepBallMotion(b, h, cfg, surface);
+      const res = stepBallMotion(b, h, cfg, surface);
+      if (onImpact && res.impact > cfg.bounceThreshold) onImpact(b, res.impact);
     }
     for (let i = 0; i < balls.length; i += 1) {
       for (let j = i + 1; j < balls.length; j += 1) {

@@ -1,13 +1,9 @@
 import * as THREE from 'three';
 import { CONFIG, TEAMS, homePosition, isPlayablePoint, startPosition, throwPosition } from './config.js';
 import { rakhPosition } from './rules.js';
-import {
-  createBody,
-  stepBallMotion,
-  resolveBallCollision,
-  simulateShot,
-  throwVelocity,
-} from './physics.js';
+import { createBody, setRollingSpin, simulateShot, stepBalls, throwVelocity } from './physics.js';
+import { matHollowIndex, surfaceHeight } from './terrain.js';
+import { createGoolah } from './models.js';
 import {
   RulesEngine,
   RULES,
@@ -221,11 +217,6 @@ export class Game {
     // A goolah is a heavy cast-steel ball: a dense sphere with a broken-up
     // specular, a raised team band turned into the metal, two cast pips on the
     // poles so its roll is visible, and a soft contact shadow on the dirt.
-    const ballGeo = new THREE.SphereGeometry(CONFIG.ballRadius, 32, 24);
-    const bandGeo = new THREE.TorusGeometry(CONFIG.ballRadius * 1.008, 0.03, 10, 40);
-    const pipGeo = new THREE.SphereGeometry(CONFIG.ballRadius * 0.16, 10, 8);
-
-    const iron = castIronTextures();
     const shadowTex = contactShadowTexture();
     const shadowGeo = new THREE.PlaneGeometry(
       CONFIG.ballRadius * 5.2,
@@ -234,39 +225,19 @@ export class Game {
 
     TEAMS.forEach((team, teamIndex) => {
       for (let playerIndex = 0; playerIndex < CONFIG.playerCount; playerIndex++) {
+        // The visible goolah comes from models.js: a cast steel ball with a
+        // machined seam, a team inlay in the seam and cast pips at the poles.
+        //
+        //   group -> positioned by the simulation
+        //     spin  -> rotated by the simulation quaternion
+        //       piece -> the actual cast ball
+        //     shadow -> stays flat on the dirt, so it must not spin
+        const piece = createGoolah(team, CONFIG.ballRadius);
         const group = new THREE.Group();
-
-        const material = new THREE.MeshStandardMaterial({
-          color: 0xbec5d1,
-          metalness: 1.0,
-          roughness: 0.36,
-          roughnessMap: iron.roughness,
-          bumpMap: iron.bump,
-          bumpScale: 0.03,
-          envMapIntensity: 1.7,
-        });
-        const mesh = new THREE.Mesh(ballGeo, material);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        group.add(mesh);
-
-        const band = new THREE.Mesh(
-          bandGeo,
-          new THREE.MeshStandardMaterial({
-            color: team.color,
-            metalness: 0.66,
-            roughness: 0.28,
-            emissive: new THREE.Color(team.color).multiplyScalar(0.24),
-          })
-        );
-        band.rotation.x = Math.PI / 2;
-        group.add(band);
-
-        for (const side of [-1, 1]) {
-          const pip = new THREE.Mesh(pipGeo, material);
-          pip.position.y = side * CONFIG.ballRadius * 0.93;
-          group.add(pip);
-        }
+        const spin = new THREE.Group();
+        spin.add(piece.group);
+        group.add(spin);
+        const mesh = spin;
 
         const shadow = new THREE.Mesh(
           shadowGeo,
@@ -283,6 +254,8 @@ export class Game {
         group.add(shadow);
 
         const home = homePosition(teamIndex, playerIndex);
+        // Seat the goolah on the actual ground, not on a y = 0 plane.
+        home.y = surfaceHeight(home.x, home.z) + CONFIG.ballRadius;
         group.position.copy(home);
         this.scene.add(group);
 
@@ -295,7 +268,7 @@ export class Game {
           // home | staged | live | settled | mat
           state: 'home',
           matIndex: -1,
-          body: createBody(home.x, home.y, home.z, CONFIG.ballRadius),
+          body: createBody(home.x, home.y, home.z, CONFIG.ballRadius, CONFIG),
         });
       }
     });
@@ -495,6 +468,7 @@ export class Game {
     for (const ball of this.balls) {
       const role = ball.teamIndex === s.throwingTeam ? 'throw' : 'defend';
       const pos = startPosition(role, ball.playerIndex);
+      pos.y = surfaceHeight(pos.x, pos.z) + CONFIG.ballRadius;
       ball.state = role === 'throw' ? 'staged' : 'home';
       ball.matIndex = -1;
       ball.body.vel.set(0, 0, 0);
@@ -742,6 +716,9 @@ export class Game {
     if (!this.rules.canThrow()) return;
     const ball = this.activeBall;
     ball.body.vel.copy(throwVelocity(this.aim.dir, power, CONFIG));
+    // Released rolling: the spin matches the launch speed, and the friction in
+    // the integrator takes over from there.
+    setRollingSpin(ball.body);
     ball.body.resting = false;
     ball.state = 'live';
 
@@ -764,22 +741,11 @@ export class Game {
   /* ------------------------------------------------------------ physics --- */
 
   /**
-   * Ground height at a point: flat dirt, dipping into each mat dish. This makes
-   * the 5 cm depressions part of the physics instead of decoration.
+   * The surface the simulation runs on: the natural terrain with the four mat
+   * dishes cut into it. terrain.js owns that shape, so the ground mesh drawn in
+   * world.js, the dish modelled in models.js and this surface are one thing.
    */
-  surfaceHeightAt = (x, z) => {
-    let height = 0;
-    for (const mat of this.mats) {
-      const dx = x - mat.position.x;
-      const dz = z - mat.position.z;
-      const distance = Math.hypot(dx, dz);
-      if (distance >= CONFIG.matRadius) continue;
-      const t = 1 - distance / CONFIG.matRadius;
-      const dip = -CONFIG.matDepth * (t * t * (3 - 2 * t));
-      if (dip < height) height = dip;
-    }
-    return height;
-  };
+  surfaceHeightAt = (x, z) => surfaceHeight(x, z);
 
   update(dt) {
     this.time += dt;
@@ -805,43 +771,50 @@ export class Game {
     }
   }
 
+  /**
+   * Advance the goolahs.
+   *
+   * Every goolah goes to the shared integrator — not only the one in play —
+   * because a defender waiting behind its mat and a goolah resting in a dish both
+   * have to be *struck*. A parked goolah is asleep and only wakes when a genuine
+   * contact gives it velocity, so nothing drifts on its own.
+   */
   stepPhysics(dt) {
-    const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
-    const h = dt / steps;
+    const byBody = new Map();
+    for (const ball of this.balls) byBody.set(ball.body, ball);
 
-    for (let i = 0; i < steps; i++) {
-      for (const ball of this.balls) {
-        if (ball.state !== 'live') continue;
-        const { impact } = stepBallMotion(ball.body, h, CONFIG, this.surfaceHeightAt);
-        if (impact > 2.2) this.spawnDust(ball.body.pos, 0.6, 0.3);
-        if (ball.body.resting) this.settleBall(ball);
-      }
-      this.resolveCollisions();
-    }
-
-    this.syncVisuals(dt);
-  }
-
-  resolveCollisions() {
-    for (let i = 0; i < this.balls.length; i++) {
-      const a = this.balls[i];
-      for (let j = i + 1; j < this.balls.length; j++) {
-        const b = this.balls[j];
-        // One goolah must be moving for a contact to happen, but every goolah on
-        // the field can be struck: a defender waiting at its start (rule 2), a
-        // teammate at the line (rule 7) and one resting in a mat (rule 5).
-        if (a.state !== 'live' && b.state !== 'live') continue;
-        const { hit, impactSpeed } = resolveBallCollision(a.body, b.body, CONFIG);
-        if (!hit) continue;
-        if (impactSpeed > 1.6) {
-          _a.copy(a.body.pos).lerp(b.body.pos, 0.5);
-          this.spawnDust(_a, 0.7, 0.3);
+    stepBalls(
+      this.balls.map((ball) => ball.body),
+      dt,
+      CONFIG,
+      this.surfaceHeightAt,
+      (contact) => {
+        // This contact *is* the physical event the scoring reads, so a Tir can
+        // never be awarded for two goolahs merely standing near each other, and
+        // one strike can never be reported twice.
+        const a = byBody.get(contact.a);
+        const b = byBody.get(contact.b);
+        if (!a || !b) return;
+        if (contact.impactSpeed > 1.2) {
+          _a.copy(contact.point);
+          this.spawnDust(_a, 0.5 + Math.min(0.8, contact.impactSpeed * 0.07), 0.32);
         }
         this.wakeBall(a);
         this.wakeBall(b);
         this.noteHit(a, b);
+      },
+      (body, impact) => {
+        // Landing dust: the ground takes the weight of the metal.
+        const ball = byBody.get(body);
+        if (ball) this.spawnDust(body.pos, 0.4 + Math.min(0.5, impact * 0.05), 0.26);
       }
+    );
+
+    for (const ball of this.balls) {
+      if (ball.state === 'live' && ball.body.resting) this.settleBall(ball);
     }
+
+    this.syncVisuals(dt);
   }
 
   /**
@@ -888,7 +861,7 @@ export class Game {
     if (mat) {
       ball.state = 'mat';
       ball.matIndex = mat.index;
-      ball.body.pos.y = CONFIG.ballRadius - CONFIG.matDepth + 0.001;
+      ball.body.pos.y = surfaceHeight(ball.body.pos.x, ball.body.pos.z) + CONFIG.ballRadius;
       ball.group.position.copy(ball.body.pos);
       return;
     }
@@ -897,12 +870,8 @@ export class Game {
   }
 
   matUnder(position) {
-    for (const mat of this.mats) {
-      const dx = position.x - mat.position.x;
-      const dz = position.z - mat.position.z;
-      if (Math.hypot(dx, dz) <= CONFIG.matRadius * 0.75) return mat;
-    }
-    return null;
+    const index = matHollowIndex(position.x, position.z);
+    return index >= 0 ? this.mats[index] : null;
   }
 
   syncVisuals(dt) {
@@ -910,14 +879,10 @@ export class Game {
     for (const ball of this.balls) {
       ball.group.position.copy(ball.body.pos);
 
-      const speed = Math.hypot(ball.body.vel.x, ball.body.vel.z);
-      if (speed > 0.02 && ball.body.pos.y <= R + 0.06) {
-        // Rolling spin: axis is perpendicular to travel, so the ball appears to
-        // roll rather than slide.
-        _b.set(-ball.body.vel.z, 0, ball.body.vel.x).normalize();
-        _q.setFromAxisAngle(_b, (speed * dt) / R);
-        ball.mesh.quaternion.premultiply(_q);
-      }
+      // The orientation is the simulation's own: physics.js integrates angular
+      // velocity, so the goolah rolls, spins off a strike and settles exactly as
+      // the dynamics dictate. Nothing is animated on top of it.
+      ball.mesh.quaternion.copy(ball.body.quat);
 
       // Contact shadow: it stays on the dirt while the goolah is off the ground
       // and spreads and fades as the gap opens. This is what gives the ball its
